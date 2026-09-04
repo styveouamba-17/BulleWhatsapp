@@ -151,6 +151,11 @@ body.is-tauri .devbar { display: none; }
 .dock[data-state="dormant"] .bubble { opacity: 0.26; }
 .dock[data-state="dormant"] .bubble:hover { opacity: 1; }
 
+/* Ne pas déranger : la bulle continue de compter les messages en
+   silence, sans rebond ni anneau. Un simple liseré neutre — jamais
+   vert, cet accent est réservé au compteur et à l'envoi. */
+.dock[data-muted="1"] .bubble { border-color: var(--stroke); }
+
 /* Anneau d'attention — une seule pulsation à l'arrivée d'un message. */
 .bubble__ring {
   position: absolute;
@@ -385,6 +390,55 @@ body.is-tauri .devbar { display: none; }
 }
 
 .panel__status[data-tone="error"] { color: #ff99a0; }
+
+/* ---------------------------------------------------------------
+   Menu contextuel — clic droit sur la bulle
+   --------------------------------------------------------------- */
+
+.ctxmenu {
+  position: fixed;
+  z-index: 100;
+  padding: 4px;
+  border: 1px solid var(--stroke);
+  border-radius: 9px;
+  background: var(--acrylic);
+  backdrop-filter: blur(48px) saturate(140%);
+  -webkit-backdrop-filter: blur(48px) saturate(140%);
+  box-shadow: var(--shadow-flyout);
+}
+
+.ctxmenu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctxmenu__item:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.ctxmenu__item:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+
+.ctxmenu__check {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.ctxmenu__item[aria-checked="true"] .ctxmenu__check {
+  border-color: var(--text-2);
+  background: var(--text-2);
+}
 
 /* ---------------------------------------------------------------
    Bandeau d'aperçu (navigateur uniquement)

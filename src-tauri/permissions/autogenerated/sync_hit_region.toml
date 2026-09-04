@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-hit-region"
+description = "Enables the sync_hit_region command without any pre-configured scope."
+commands.allow = ["sync_hit_region"]
+
+[[permission]]
+identifier = "deny-sync-hit-region"
+description = "Denies the sync_hit_region command without any pre-configured scope."
+commands.deny = ["sync_hit_region"]

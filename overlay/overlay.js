@@ -3,7 +3,17 @@
    Sans connecteur, le fichier tourne seul dans un navigateur en mode
    aperçu. Avec le connecteur, il bascule automatiquement sur le vrai
    flux WhatsApp. Aucune bascule manuelle à faire.
+
+   Enveloppé dans une IIFE gardée : sous Tauri (WebView2), la page peut
+   être réinjectée dans le même contexte JS sans le rechargement complet
+   qu'un navigateur ferait, ce qui provoquerait sinon une collision
+   « already been declared » sur les const/let de premier niveau.
    --------------------------------------------------------------- */
+
+if (window.__overlayJsRan) {
+  // Deuxième exécution dans le même contexte : ne rien refaire.
+} else {
+window.__overlayJsRan = true;
 
 const WS_URL = 'ws://127.0.0.1:8787';
 const DORMANT_AFTER = 12000;   // retour au repos si l'utilisateur n'a rien fait
@@ -26,6 +36,8 @@ const el = {
   devDot:      document.getElementById('devDot'),
   devLabel:    document.getElementById('devLabel'),
   devFire:     document.getElementById('devFire'),
+  ctxmenu:     document.getElementById('ctxmenu'),
+  ctxMute:     document.getElementById('ctxMute'),
 };
 
 /** File des messages non lus, du plus ancien au plus récent. */
@@ -33,7 +45,23 @@ let queue = [];
 let socket = null;
 let dormantTimer = null;
 
-if (window.__TAURI__) document.body.classList.add('is-tauri');
+const isTauri = Boolean(window.__TAURI__);
+if (isTauri) document.body.classList.add('is-tauri');
+
+/* ---------------------------------------------------------------
+   Ne pas déranger : la bulle continue de recevoir et de compter,
+   mais sans rebond ni anneau. Préférence locale, pas un état de
+   conversation — au même titre que la position mémorisée.
+   --------------------------------------------------------------- */
+
+let muted = false;
+try { muted = localStorage.getItem('bulle.muted') === '1'; } catch {}
+
+function applyMuted() {
+  el.dock.dataset.muted = muted ? '1' : '0';
+  el.ctxMute.setAttribute('aria-checked', String(muted));
+}
+applyMuted();
 
 /* ---------------------------------------------------------------
    Avatar de repli : initiales sur fond coloré, généré localement.
@@ -107,6 +135,7 @@ function openPanel() {
   setState('open');
   clearTimeout(dormantTimer);
   requestAnimationFrame(() => el.input.focus());
+  syncHitRegion();
 }
 
 function closePanel({ consume = false } = {}) {
@@ -119,6 +148,7 @@ function closePanel({ consume = false } = {}) {
   render();
   setState(queue.length ? 'idle' : 'dormant');
   scheduleDormant();
+  syncHitRegion();
 }
 
 function scheduleDormant() {
@@ -162,7 +192,8 @@ function incoming(m) {
 
   // Le panneau ne s'ouvre pas tout seul : la bulle signale, l'utilisateur
   // décide. S'ouvrir à chaque message devient invivable au bout d'une heure.
-  if (el.dock.dataset.state !== 'open') {
+  // En mode "Ne pas déranger", le message est compté mais sans rebond.
+  if (el.dock.dataset.state !== 'open' && !muted) {
     setState('alert');
     setTimeout(() => {
       if (el.dock.dataset.state === 'alert') setState('idle');
@@ -237,6 +268,85 @@ function connect() {
 }
 
 /* ---------------------------------------------------------------
+   Tauri — zone cliquable réelle
+   La fenêtre couvre toute la hauteur de l'écran mais reste transparente
+   au clic partout sauf sur la bulle (et le panneau quand il est ouvert).
+   Le passage des clics est géré nativement côté Rust (voir
+   src-tauri/src/lib.rs) : on ne fait que lui signaler où sont les zones
+   interactives, en pixels physiques, à chaque changement de mise en page.
+   --------------------------------------------------------------- */
+
+let hitRegionQueued = false;
+
+function syncHitRegion() {
+  if (!isTauri || hitRegionQueued) return;
+  hitRegionQueued = true;
+
+  requestAnimationFrame(() => {
+    hitRegionQueued = false;
+    const b = el.bubble.getBoundingClientRect();
+    const panelOpen = el.dock.dataset.state === 'open';
+    const menuOpen = !el.ctxmenu.hidden;
+    const secondary = panelOpen
+      ? el.panel.getBoundingClientRect()
+      : menuOpen
+        ? el.ctxmenu.getBoundingClientRect()
+        : null;
+
+    window.__TAURI__.core.invoke('sync_hit_region', {
+      scale: window.devicePixelRatio || 1,
+      bubbleCx: b.left + b.width / 2,
+      bubbleCy: b.top + b.height / 2,
+      bubbleR: b.width / 2,
+      panelOpen: Boolean(secondary),
+      panelX: secondary ? secondary.left : 0,
+      panelY: secondary ? secondary.top : 0,
+      panelW: secondary ? secondary.width : 0,
+      panelH: secondary ? secondary.height : 0,
+    }).catch(() => {});
+  });
+}
+
+/* ---------------------------------------------------------------
+   Menu contextuel — clic droit sur la bulle
+   --------------------------------------------------------------- */
+
+function openCtxMenu(x, y) {
+  el.ctxmenu.hidden = false;
+  const w = el.ctxmenu.offsetWidth;
+  const h = el.ctxmenu.offsetHeight;
+  el.ctxmenu.style.left = Math.min(x, window.innerWidth - w - 8) + 'px';
+  el.ctxmenu.style.top = Math.min(y, window.innerHeight - h - 8) + 'px';
+  syncHitRegion();
+}
+
+function closeCtxMenu() {
+  if (el.ctxmenu.hidden) return;
+  el.ctxmenu.hidden = true;
+  syncHitRegion();
+}
+
+el.bubble.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  openCtxMenu(e.clientX, e.clientY);
+});
+
+el.ctxMute.addEventListener('click', () => {
+  muted = !muted;
+  try { localStorage.setItem('bulle.muted', muted ? '1' : '0'); } catch {}
+  applyMuted();
+  closeCtxMenu();
+});
+
+document.addEventListener('pointerdown', (e) => {
+  if (!el.ctxmenu.hidden && !el.ctxmenu.contains(e.target)) closeCtxMenu();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !el.ctxmenu.hidden) closeCtxMenu();
+});
+
+/* ---------------------------------------------------------------
    Déplacement vertical le long du bord
    --------------------------------------------------------------- */
 
@@ -257,6 +367,7 @@ el.bubble.addEventListener('pointermove', (e) => {
   const h = el.dock.offsetHeight;
   const top = Math.min(Math.max(drag.top + dy, 8), window.innerHeight - h - 8);
   el.dock.style.top = top + 'px';
+  syncHitRegion();
 });
 
 el.bubble.addEventListener('pointerup', (e) => {
@@ -314,4 +425,7 @@ try {
 
 render();
 connect();
+syncHitRegion();
 setTimeout(() => { if (!socket || socket.readyState !== 1) el.devFire.click(); }, 900);
+
+} // fin de la garde __overlayJsRan
