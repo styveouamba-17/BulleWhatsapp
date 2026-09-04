@@ -92,9 +92,12 @@ Le WebSocket écoute sur `127.0.0.1` uniquement. Ne jamais l'exposer sur `0.0.0.
 
 ```
 overlay/       Interface. Tourne seule dans un navigateur (mode aperçu avec
-               faux messages) ou sous Tauri. Bascule automatique dès que le
-               connecteur répond sur ws://127.0.0.1:8787.
+               faux messages, connecteur non joignable — c'est attendu) ou
+               sous Tauri, où elle découvre le connecteur via une commande
+               Rust plutôt qu'un port fixe (voir plus bas).
 connector/     Session Baileys + serveur WebSocket local.
+src-tauri/     Fenêtre Tauri : bande transparente ancrée au bord droit,
+               click-through natif, découverte du connecteur.
 ```
 
 Le protocole entre les deux, volontairement minuscule :
@@ -103,31 +106,55 @@ Le protocole entre les deux, volontairement minuscule :
 |---|---|
 | connecteur → overlay | `{type:'message', jid, from, text, avatar, at, group}` |
 | connecteur → overlay | `{type:'sent', ok, error?}` · `{type:'qr'}` · `{type:'status', state}` |
+| overlay → connecteur | `{type:'auth', token}` (obligatoire en premier message) |
 | overlay → connecteur | `{type:'reply', jid, text}` · `{type:'typing', jid}` |
 
 Garder ce contrat stable : c'est lui qui permettra de brancher Instagram plus
 tard sans toucher à l'overlay.
 
+Le connecteur n'écoute plus sur un port fixe : il choisit un port libre et un
+jeton à chaque lancement, et les dépose dans
+`<tmp système>/bulle-connector.json`. L'overlay les lit via la commande Tauri
+`read_connector_info` (voir `src-tauri/src/lib.rs`) et s'authentifie avec
+`{type:'auth', token}` avant tout autre message — sinon le connecteur ferme la
+connexion. Conséquence : l'aperçu navigateur nu (`overlay/index.html` ouvert
+sans Tauri) ne peut plus parler au vrai connecteur, il n'a pas accès à cette
+commande. C'est un renoncement assumé : ce mode n'a jamais été le chemin de
+production, seulement un outil de réglage visuel.
+
 ## Ce qui reste à faire
 
-1. **Empaqueter en Tauri.** Scaffolder avec le CLI courant
-   (`npm create tauri-app`) plutôt que de recopier un `tauri.conf.json` figé.
-   Réglages nécessaires : `decorations: false`, `transparent: true`,
-   `alwaysOnTop: true`, `skipTaskbar: true`, `resizable: false`, `shadow: false`.
-   Côté Windows, ajouter `WS_EX_NOACTIVATE` pour que la bulle ne vole pas le
-   focus, et gérer le click-through en dehors de la bulle.
+1. ~~Empaqueter en Tauri~~ — fait. Bande transparente ancrée au bord droit,
+   `decorations: false`, `transparent: true`, `alwaysOnTop: true`,
+   `skipTaskbar: true`, `resizable: false`, `shadow: false`. `WS_EX_NOACTIVATE`
+   posé *après* `show()` (tao réapplique ses propres styles pendant l'affichage
+   initial et écraserait sinon ce qu'on pose avant). Click-through géré par un
+   suivi global du curseur côté Rust (`GetCursorPos`), comparé à la zone
+   cliquable que l'overlay signale via `sync_hit_region` — `set_ignore_cursor_events`
+   coupe tous les événements souris de la fenêtre, pas juste une région, donc un
+   mousemove JS ne peut pas détecter le retour du curseur une fois le
+   passthrough actif.
 2. **Déclarer le connecteur en sidecar** (`externalBin`) pour n'avoir qu'un
    installeur et un process qui meurt avec l'app. Compiler le Node en exe unique
-   avec `bun build --compile`.
-3. **Port aléatoire + token** au lieu du 8787 en dur.
-4. **Indicateur de session expirée.** Le piège classique est l'échec
-   silencieux : le widget cesse de recevoir et l'utilisateur s'en aperçoit trois
-   jours plus tard. La bulle doit passer en gris avec « Reconnecter ».
+   avec `bun build --compile`. C'est aussi ce qui donnera un vrai redémarrage
+   automatique si le connecteur meurt (le process actuel survit à ses propres
+   exceptions non interceptées, mais rien ne le relance s'il est tué de
+   l'extérieur).
+3. ~~Port aléatoire + token~~ — fait, voir ci-dessus.
+4. ~~Indicateur de session expirée~~ — fait. La bulle grise
+   (`data-connector="down"|"expired"` sur `.dock`) dès que le WS est injoignable
+   ou que WhatsApp signale une déconnexion, visible sans ouvrir le panneau.
+   Cliquer dessus sans message en attente affiche désormais le pourquoi au lieu
+   de ne rien faire.
 5. **`sendPresenceUpdate('composing')`** quand l'utilisateur clique dans le
    champ — le contact voit « en train d'écrire… ». Le connecteur gère déjà la
    commande, l'overlay ne l'émet pas encore.
 6. **Écran de configuration** : afficher le QR dans l'interface plutôt que dans
    le terminal.
+7. **Chiffrer `connector/auth/`** (DPAPI ou plugin Stronghold de Tauri).
+   `useMultiFileAuthState` de Baileys lit/écrit ces fichiers directement ; il
+   faudra le remplacer par une implémentation équivalente qui chiffre/déchiffre
+   à la volée plutôt que de bricoler un chiffrement après coup.
 
 ## Design
 

@@ -20,21 +20,38 @@ C'est là qu'on arbitre les vraies questions : taille de la bulle, vitesse de
 l'ouverture, hauteur du panneau, discrétion au repos. Tout se règle dans les
 variables en haut de `overlay/overlay.css`.
 
-## Brancher le vrai WhatsApp
+**Ce mode ne parle plus au vrai connecteur** depuis que celui-ci écoute sur un
+port choisi au hasard (voir plus bas) : la découverte du port passe par une
+commande Tauri, indisponible dans un onglet de navigateur nu. Pour tester avec
+de vrais messages, il faut lancer l'app Tauri (§ suivant).
 
-Node 20 ou plus.
+## Lancer l'app pour de vrai
+
+Node 20+, et la chaîne Rust + outils de build C++ (voir
+[tauri.app/start/prerequisites](https://tauri.app/start/prerequisites/)).
+
+```bash
+npm install
+cd connector && npm install && cd ..
+npm run tauri dev
+```
+
+La fenêtre Bulle s'ouvre, ancrée au bord droit de l'écran. Dans un second
+terminal :
 
 ```bash
 cd connector
-npm install
 npm start
 ```
 
-Un QR code s'affiche dans le terminal. Sur le téléphone :
-**WhatsApp › Réglages › Appareils liés › Lier un appareil**.
+Un QR code s'affiche dans ce terminal. Sur le téléphone :
+**WhatsApp › Réglages › Appareils liés › Lier un appareil**. Une fois scanné,
+la bulle se met à jour toute seule — aucune bascule manuelle.
 
-Une fois connecté, rouvrir `overlay/index.html` : il détecte le connecteur tout
-seul et bascule sur le vrai flux. Le bandeau en bas à gauche passe au vert.
+Le connecteur choisit un port libre et un jeton à chaque lancement (plus de
+8787 fixe) et dépose les deux dans un fichier du dossier temp système ; c'est
+comme ça que l'app Tauri le retrouve. Si la bulle reste grise, c'est que ce
+fichier n'existe pas encore ou que le connecteur n'a pas démarré.
 
 La session est conservée dans `connector/auth/`. Pour repartir de zéro et
 réappairer :
@@ -43,15 +60,23 @@ réappairer :
 npm run reset
 ```
 
-## Ce qui n'est pas encore fait
+## Où en est le projet
 
-Le projet est aux deux tiers : l'interface et le connecteur fonctionnent, mais
-l'empaquetage Tauri reste à faire — c'est lui qui transformera la page web en
-vraie fenêtre flottante sans bordure, toujours au-dessus, sans icône dans la
-barre des tâches.
+- **Phase 0 — Interface** : faite.
+- **Phase 1 — Flux réel** : faite.
+- **Phase 2 — Vraie fenêtre (Tauri)** : faite — bande transparente ancrée au
+  bord droit, toujours au-dessus, hors barre des tâches, focus bloqué,
+  clic-through natif en dehors de la bulle.
+- **Phase 3 — Fiabilité** : partielle. Fait : indicateur visuel de panne
+  (bulle grisée quand le connecteur est injoignable ou la session WhatsApp
+  révoquée), le connecteur ne meurt plus sur une exception isolée, port
+  aléatoire + jeton à la place du 8787 en dur. Pas fait : redémarrage
+  automatique si le process connecteur meurt entièrement, chiffrement de
+  `connector/auth/`.
+- **Phase 4 — Installable** : pas commencée.
 
-La liste complète est dans `CLAUDE.md`, avec les décisions déjà prises et les
-pièges à ne pas retraverser.
+La liste complète, les décisions déjà prises et les pièges à ne pas
+retraverser sont dans `CLAUDE.md`.
 
 ## Avertissement
 
