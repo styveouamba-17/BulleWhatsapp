@@ -266,6 +266,58 @@ body.is-tauri .devbar { display: none; }
     visibility 0s;
 }
 
+/* ---------------------------------------------------------------
+   Qui attend — rangée d'expéditeurs en attente, quand il y en a
+   plusieurs. Choisir, pas parcourir : plafonnée, sans recherche,
+   disparaît dès qu'on a répondu ou fermé. Volontairement discret pour
+   ne pas glisser vers une boîte de réception.
+   --------------------------------------------------------------- */
+
+.senders {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.senders__item {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: border-color var(--fast) var(--ease);
+}
+
+.senders__item img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.senders__item:hover { border-color: var(--stroke-strong); }
+.senders__item[aria-pressed="true"] { border-color: var(--text-2); }
+.senders__item:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.senders__more {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
 .panel__head {
   display: flex;
   align-items: center;

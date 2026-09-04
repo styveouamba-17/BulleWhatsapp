@@ -41,12 +41,17 @@ const el = {
   devFire:     document.getElementById('devFire'),
   ctxmenu:     document.getElementById('ctxmenu'),
   ctxMute:     document.getElementById('ctxMute'),
+  senders:     document.getElementById('senders'),
 };
 
 /** File des messages non lus, du plus ancien au plus récent. */
 let queue = [];
 let socket = null;
 let dormantTimer = null;
+
+/** Fil actuellement affiché dans le panneau — pas forcément le dernier
+    arrivé : on peut choisir à qui répondre parmi ceux qui attendent. */
+let selectedJid = null;
 
 /** État du connecteur : 'ok' | 'down' (WS injoignable) | 'expired' (session WhatsApp révoquée). */
 let connectorState = 'ok';
@@ -124,6 +129,94 @@ function render() {
   el.bubble.setAttribute('aria-label', `${queue.length} message(s), dernier de ${latest.from}`);
 }
 
+/* ---------------------------------------------------------------
+   Qui attend — choisir à qui répondre parmi plusieurs expéditeurs en
+   attente, sans que ça devienne une boîte de réception : pas de
+   recherche, pas de tri, plafonné à quelques avatars. La pile
+   s'efface dès qu'on répond ou qu'on ferme.
+   --------------------------------------------------------------- */
+
+const SENDERS_VISIBLE = 4;
+
+/** Un message par expéditeur distinct — le plus récent de chaque fil,
+    du plus récent au plus ancien. */
+function distinctSenders() {
+  const seen = new Map();
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const m = queue[i];
+    if (!seen.has(m.jid)) seen.set(m.jid, m);
+  }
+  return [...seen.values()];
+}
+
+function renderSendersStrip() {
+  const senders = distinctSenders();
+
+  if (senders.length < 2) {
+    el.senders.hidden = true;
+    el.senders.replaceChildren();
+    return;
+  }
+
+  el.senders.hidden = false;
+  el.senders.replaceChildren();
+
+  senders.slice(0, SENDERS_VISIBLE).forEach((m) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'senders__item';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-pressed', String(m.jid === selectedJid));
+    btn.setAttribute('aria-label', m.from);
+    btn.title = m.from;
+
+    const img = document.createElement('img');
+    img.src = avatarFor(m);
+    img.alt = '';
+    btn.appendChild(img);
+
+    btn.addEventListener('click', () => selectThread(m.jid));
+    el.senders.appendChild(btn);
+  });
+
+  const overflow = senders.length - SENDERS_VISIBLE;
+  if (overflow > 0) {
+    const chip = document.createElement('span');
+    chip.className = 'senders__more';
+    chip.textContent = '+' + overflow;
+    chip.title = `${overflow} autre(s) en attente`;
+    el.senders.appendChild(chip);
+  }
+}
+
+/** Affiche le dernier message du fil choisi — pas forcément le plus
+    récent tous expéditeurs confondus. */
+function renderThreadContent() {
+  const latest = [...queue].reverse().find(m => m.jid === selectedJid);
+  if (!latest) return;
+
+  el.panelAvatar.src = avatarFor(latest);
+  el.panelAvatar.alt = '';
+  el.name.textContent = latest.from;
+  el.meta.textContent = timeLabel(latest.at);
+  el.msg.textContent = latest.text;
+
+  // Les autres messages du même fil restent signalés sans être empilés :
+  // le panneau montre le dernier de ce fil, pas une boîte de réception.
+  const others = queue.filter(m => m.jid === latest.jid).length - 1;
+  el.more.hidden = others < 1;
+  el.more.textContent = others === 1
+    ? '1 autre message dans cette conversation'
+    : `${others} autres messages dans cette conversation`;
+}
+
+function selectThread(jid) {
+  selectedJid = jid;
+  renderThreadContent();
+  renderSendersStrip();
+  syncHitRegion();
+}
+
 function openPanel() {
   const latest = queue[queue.length - 1];
 
@@ -133,19 +226,9 @@ function openPanel() {
     return;
   }
 
-  el.panelAvatar.src = avatarFor(latest);
-  el.panelAvatar.alt = '';
-  el.name.textContent = latest.from;
-  el.meta.textContent = timeLabel(latest.at);
-  el.msg.textContent = latest.text;
-
-  // Les autres messages du même fil restent signalés sans être empilés :
-  // la bulle montre le dernier, pas une boîte de réception.
-  const others = queue.filter(m => m.jid === latest.jid).length - 1;
-  el.more.hidden = others < 1;
-  el.more.textContent = others === 1
-    ? '1 autre message dans cette conversation'
-    : `${others} autres messages dans cette conversation`;
+  selectedJid = latest.jid;
+  renderThreadContent();
+  renderSendersStrip();
 
   clearStatus();
   setState('open');
@@ -159,6 +242,7 @@ function openPanel() {
     doit pouvoir s'expliquer d'un clic, sans qu'on ait besoin d'aller
     chercher un terminal. */
 function showConnectorPanel() {
+  el.senders.hidden = true;
   el.panelAvatar.src = fallbackAvatar('');
   el.panelAvatar.alt = '';
   el.name.textContent = 'Bulle';
@@ -175,10 +259,10 @@ function showConnectorPanel() {
 }
 
 function closePanel({ consume = false } = {}) {
-  if (consume) {
-    const jid = queue.length ? queue[queue.length - 1].jid : null;
-    queue = queue.filter(m => m.jid !== jid);
+  if (consume && selectedJid) {
+    queue = queue.filter(m => m.jid !== selectedJid);
   }
+  selectedJid = null;
   el.input.value = '';
   el.send.disabled = true;
   render();
@@ -226,10 +310,20 @@ function incoming(m) {
   });
   render();
 
+  if (el.dock.dataset.state === 'open') {
+    // Le panneau est ouvert sur un autre fil : la pile d'expéditeurs se
+    // met à jour, mais on ne coupe pas ce qu'on est en train de lire
+    // ou de taper.
+    renderSendersStrip();
+    if (m.jid === selectedJid) renderThreadContent();
+    syncHitRegion();
+    return;
+  }
+
   // Le panneau ne s'ouvre pas tout seul : la bulle signale, l'utilisateur
   // décide. S'ouvrir à chaque message devient invivable au bout d'une heure.
   // En mode "Ne pas déranger", le message est compté mais sans rebond.
-  if (el.dock.dataset.state !== 'open' && !muted) {
+  if (!muted) {
     setState('alert');
     setTimeout(() => {
       if (el.dock.dataset.state === 'alert') setState('idle');
@@ -244,7 +338,7 @@ function incoming(m) {
 
 function send() {
   const text = el.input.value.trim();
-  const latest = queue[queue.length - 1];
+  const latest = [...queue].reverse().find(m => m.jid === selectedJid);
   if (!text || !latest) return;
 
   if (socket && socket.readyState === WebSocket.OPEN) {
