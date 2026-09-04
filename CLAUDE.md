@@ -77,8 +77,12 @@ Chacun coûte une soirée si on tombe dedans.
 
 ## Sécurité
 
-Le dossier `./auth` contient une **session active sur le WhatsApp personnel de
-l'utilisateur**. Il est dans `.gitignore` et doit y rester.
+Le dossier `%APPDATA%/Bulle/auth` contient une **session active sur le
+WhatsApp personnel de l'utilisateur**. Il n'est jamais dans le dépôt.
+Volontairement hors de `connector/` : un sidecar tourne depuis un dossier
+d'installation potentiellement en lecture seule (Program Files),
+`%APPDATA%` est garanti inscriptible. Une session trouvée à l'ancien
+emplacement (`connector/auth`) est migrée automatiquement au démarrage.
 
 Chiffré au repos via DPAPI (`connector/authCrypt.js`) : à l'arrêt propre du
 connecteur (SIGINT/SIGTERM), `auth/` est archivé, chiffré avec

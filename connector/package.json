@@ -7,7 +7,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "reset": "node -e \"require('fs').rmSync('./auth',{recursive:true,force:true})\" && echo Session supprimee, relancez npm start"
+    "reset": "node -e \"const p=require('path').join(process.env.APPDATA,'Bulle');require('fs').rmSync(p,{recursive:true,force:true})\" && echo Session supprimee, relancez npm start"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

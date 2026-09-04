@@ -26,8 +26,25 @@ import os from 'node:os';
 import path from 'node:path';
 import { sealAuthDir, unsealAuthDir } from './authCrypt.js';
 
-const AUTH_DIR = './auth';
-const AUTH_ENC_FILE = './auth.enc';
+// %APPDATA% plutôt qu'un chemin relatif au dossier du connecteur : une
+// fois empaqueté en sidecar (phase 4), le connecteur tourne depuis un
+// dossier d'installation potentiellement en lecture seule (Program
+// Files). %APPDATA% est garanti inscriptible pour l'utilisateur courant.
+const DATA_DIR = path.join(process.env.APPDATA || os.homedir(), 'Bulle');
+const AUTH_DIR = path.join(DATA_DIR, 'auth');
+const AUTH_ENC_FILE = path.join(DATA_DIR, 'auth.enc');
+
+// Migration depuis l'ancien emplacement (./auth relatif au CWD, utilisé
+// avant que le connecteur ne soit pensé pour tourner en sidecar) — pour
+// ne pas perdre une session existante au premier lancement après la mise
+// à jour. Ne fait rien si %APPDATA%/Bulle existe déjà.
+function migrateLegacyAuthLocation() {
+  if (fs.existsSync(AUTH_DIR) || fs.existsSync(AUTH_ENC_FILE)) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (fs.existsSync('./auth')) fs.renameSync('./auth', AUTH_DIR);
+  if (fs.existsSync('./auth.enc')) fs.renameSync('./auth.enc', AUTH_ENC_FILE);
+}
+migrateLegacyAuthLocation();
 
 // Port choisi par l'OS et jeton à usage unique par lancement, plutôt
 // que 8787 en dur : un process tiers sur la même machine ne doit pas

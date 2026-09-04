@@ -53,7 +53,7 @@ Le connecteur choisit un port libre et un jeton à chaque lancement (plus de
 comme ça que l'app Tauri le retrouve. Si la bulle reste grise, c'est que ce
 fichier n'existe pas encore ou que le connecteur n'a pas démarré.
 
-La session est conservée dans `connector/auth/`. Pour repartir de zéro et
+La session est conservée dans `%APPDATA%/Bulle/auth/`. Pour repartir de zéro et
 réappairer :
 
 ```bash
@@ -71,7 +71,7 @@ npm run reset
   (bulle grisée quand le connecteur est injoignable ou la session WhatsApp
   révoquée), le connecteur ne meurt plus sur une exception isolée, port
   aléatoire + jeton à la place du 8787 en dur, chiffrement au repos de
-  `connector/auth/` (DPAPI, entre deux lancements). Pas fait : redémarrage
+  `%APPDATA%/Bulle/auth/` (DPAPI, entre deux lancements). Pas fait : redémarrage
   automatique si le process connecteur meurt entièrement — reporté à la
   phase 4, plus naturel une fois le connecteur en sidecar supervisé par
   Tauri.
@@ -85,7 +85,7 @@ retraverser sont dans `CLAUDE.md`.
 
 ## Avertissement
 
-`connector/auth/` contient une session active sur un compte WhatsApp personnel.
+`%APPDATA%/Bulle/auth/` contient une session active sur un compte WhatsApp personnel.
 Ce dossier n'est pas versionné et ne doit jamais l'être.
 
 Baileys est une bibliothèque non officielle : son usage peut contrevenir aux
