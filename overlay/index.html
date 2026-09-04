@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulle</title>
+<link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+
+<!-- Faux bureau : visible uniquement en aperçu navigateur, masqué sous Tauri.
+     Sert à juger la bulle sur un fond réaliste plutôt que sur du blanc. -->
+<div class="stage" aria-hidden="true">
+  <div class="stage__code">
+    <pre><span class="c1">async function</span> <span class="c2">connectToWhatsApp</span>() {
+  <span class="c1">const</span> { state, saveCreds } = <span class="c1">await</span> <span class="c2">useMultiFileAuthState</span>(<span class="c3">'./auth'</span>)
+  <span class="c1">const</span> sock = <span class="c2">makeWASocket</span>({ auth: state })
+
+  sock.ev.<span class="c2">on</span>(<span class="c3">'messages.upsert'</span>, ({ messages, type }) => {
+    <span class="c1">if</span> (type !== <span class="c3">'notify'</span>) <span class="c1">return</span>
+    <span class="c1">for</span> (<span class="c1">const</span> m <span class="c1">of</span> messages) {
+      <span class="c1">if</span> (m.key.fromMe) <span class="c1">continue</span>
+      <span class="c2">broadcast</span>({ type: <span class="c3">'message'</span>, jid: m.key.remoteJid })
+    }
+  })
+}</pre>
+  </div>
+</div>
+
+<!-- Le widget. En Tauri, c'est tout ce qui est rendu. -->
+<div class="dock" id="dock" data-state="dormant">
+
+  <button class="bubble" id="bubble" type="button"
+          aria-label="Messages en attente" aria-expanded="false">
+    <span class="bubble__ring"></span>
+    <img class="bubble__avatar" id="bubbleAvatar" alt="">
+    <span class="bubble__badge" id="bubbleBadge" hidden>0</span>
+    <span class="bubble__grip" aria-hidden="true"></span>
+  </button>
+
+  <section class="panel" id="panel" role="dialog" aria-label="Répondre" aria-modal="false">
+    <header class="panel__head">
+      <img class="panel__avatar" id="panelAvatar" alt="">
+      <div class="panel__who">
+        <span class="panel__name" id="panelName">—</span>
+        <span class="panel__meta" id="panelMeta"></span>
+      </div>
+      <button class="panel__close" id="panelClose" type="button" aria-label="Fermer">
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+          <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor"
+                stroke-width="1.1" stroke-linecap="round" fill="none"/>
+        </svg>
+      </button>
+    </header>
+
+    <div class="panel__body">
+      <p class="panel__msg" id="panelMsg"></p>
+      <p class="panel__more" id="panelMore" hidden></p>
+    </div>
+
+    <div class="reply" id="reply">
+      <input class="reply__input" id="replyInput" type="text"
+             placeholder="Répondre" autocomplete="off" spellcheck="false"
+             aria-label="Votre réponse">
+      <button class="reply__send" id="replySend" type="button"
+              aria-label="Envoyer" disabled>
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <path d="M2 8 L14 2.5 L9.6 14 L8 9.2 Z" fill="currentColor"/>
+        </svg>
+      </button>
+    </div>
+
+    <p class="panel__status" id="panelStatus" role="status" hidden></p>
+  </section>
+</div>
+
+<!-- Bandeau d'aperçu : uniquement hors Tauri -->
+<div class="devbar" id="devbar">
+  <span class="devbar__dot" id="devDot"></span>
+  <span id="devLabel">Aperçu — connecteur absent</span>
+  <button type="button" id="devFire">Simuler un message</button>
+</div>
+
+<script src="overlay.js"></script>
+</body>
+</html>

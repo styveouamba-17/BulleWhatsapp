@@ -1,0 +1,3 @@
+connector/auth/
+connector/node_modules/
+*.log

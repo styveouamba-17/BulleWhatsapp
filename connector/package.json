@@ -1,0 +1,22 @@
+{
+  "name": "bulle-connector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Connecteur WhatsApp pour l'overlay Bulle",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "reset": "node -e \"require('fs').rmSync('./auth',{recursive:true,force:true})\" && echo Session supprimee, relancez npm start"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "baileys": "^7.0.0",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

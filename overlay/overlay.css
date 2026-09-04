@@ -1,0 +1,440 @@
+/* ---------------------------------------------------------------
+   Bulle — overlay WhatsApp pour Windows 11
+   Le widget doit passer pour un élément du système, pas pour une app
+   posée dessus. D'où le vocabulaire Fluent : acrylique, contours à
+   faible opacité, courbe d'accélération « point to point » de Win11.
+   --------------------------------------------------------------- */
+
+:root {
+  /* Matériau — acrylique sombre Fluent */
+  --acrylic:        rgba(43, 43, 43, 0.82);
+  --acrylic-hover:  rgba(55, 55, 55, 0.86);
+  --stroke:         rgba(255, 255, 255, 0.07);
+  --stroke-strong:  rgba(255, 255, 255, 0.14);
+  --shadow-flyout:  0 8px 20px rgba(0, 0, 0, 0.36), 0 0 2px rgba(0, 0, 0, 0.24);
+  --shadow-bubble:  0 4px 12px rgba(0, 0, 0, 0.34);
+
+  /* Texte — échelle Fluent sombre */
+  --text:   #ffffff;
+  --text-2: rgba(255, 255, 255, 0.786);
+  --text-3: rgba(255, 255, 255, 0.544);
+
+  /* Accent unique : le vert WhatsApp. Il n'apparaît qu'à deux endroits,
+     le compteur et le bouton d'envoi une fois qu'il y a quelque chose
+     à envoyer. Nulle part ailleurs. */
+  --accent:      #25d366;
+  --accent-deep: #1da851;
+
+  /* Mouvement — courbe « point to point » de Windows 11 */
+  --ease:     cubic-bezier(0.55, 0.55, 0, 1);
+  --ease-out: cubic-bezier(0.13, 1, 0.36, 1);
+  --fast:     150ms;
+  --normal:   250ms;
+
+  --bubble-size: 56px;
+  --panel-w:     332px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Sous Tauri le fond est transparent : on ne voit que la bulle. */
+body { background: transparent; }
+body.is-tauri .stage,
+body.is-tauri .devbar { display: none; }
+
+/* ---------------------------------------------------------------
+   Faux bureau (aperçu navigateur uniquement)
+   --------------------------------------------------------------- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(1100px 700px at 22% 18%, #1e3a4f 0%, transparent 60%),
+    linear-gradient(150deg, #0f1720 0%, #131a24 55%, #0c1118 100%);
+}
+
+.stage__code {
+  position: absolute;
+  top: 8%;
+  left: 5%;
+  width: 62%;
+  padding: 26px 30px;
+  border-radius: 10px;
+  background: rgba(16, 20, 27, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  filter: blur(1.4px);
+  opacity: 0.72;
+}
+
+.stage__code pre {
+  margin: 0;
+  font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.75;
+  color: #93a4b8;
+  white-space: pre-wrap;
+}
+
+.stage__code .c1 { color: #6f9dd6; }
+.stage__code .c2 { color: #d7c08a; }
+.stage__code .c3 { color: #97b98a; }
+
+/* ---------------------------------------------------------------
+   Le dock : ancré au bord droit, déplaçable verticalement
+   --------------------------------------------------------------- */
+
+.dock {
+  position: fixed;
+  right: 14px;
+  top: 46%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 10;
+}
+
+.dock.is-dragging { transition: none; }
+.dock.is-dragging .bubble { cursor: grabbing; }
+
+/* ---------------------------------------------------------------
+   La bulle
+   --------------------------------------------------------------- */
+
+.bubble {
+  position: relative;
+  order: 2;                      /* toujours à droite du panneau */
+  flex: 0 0 auto;
+  width: var(--bubble-size);
+  height: var(--bubble-size);
+  padding: 0;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 50%;
+  background: var(--acrylic);
+  backdrop-filter: blur(40px) saturate(140%);
+  -webkit-backdrop-filter: blur(40px) saturate(140%);
+  box-shadow: var(--shadow-bubble);
+  cursor: grab;
+  transition:
+    transform var(--fast) var(--ease),
+    background var(--fast) var(--ease),
+    opacity var(--normal) var(--ease);
+}
+
+.bubble:hover   { background: var(--acrylic-hover); transform: scale(1.05); }
+.bubble:active  { transform: scale(0.97); }
+.bubble:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+.bubble__avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  opacity: 0.94;
+}
+
+/* Au repos, rien à signaler : la bulle s'efface presque complètement
+   pour ne pas polluer l'écran pendant le travail. */
+.dock[data-state="dormant"] .bubble { opacity: 0.26; }
+.dock[data-state="dormant"] .bubble:hover { opacity: 1; }
+
+/* Anneau d'attention — une seule pulsation à l'arrivée d'un message. */
+.bubble__ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dock[data-state="alert"] .bubble__ring { animation: ring 900ms var(--ease-out); }
+.dock[data-state="alert"] .bubble       { animation: nudge 420ms var(--ease-out); }
+
+@keyframes ring {
+  0%   { opacity: 0.9; transform: scale(1); }
+  100% { opacity: 0;   transform: scale(1.5); }
+}
+
+@keyframes nudge {
+  0%   { transform: scale(1); }
+  38%  { transform: scale(1.14); }
+  70%  { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+
+.bubble__badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #05300f;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  box-shadow: 0 0 0 2px rgba(20, 20, 20, 0.55);
+}
+
+/* Poignée de déplacement : deux traits discrets, visibles au survol. */
+.bubble__grip {
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 14px;
+  height: 2px;
+  margin-left: -7px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 -4px 0 rgba(255, 255, 255, 0.5);
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.bubble:hover .bubble__grip { opacity: 1; }
+
+/* ---------------------------------------------------------------
+   Le panneau — se déplie vers la gauche depuis la bulle
+   --------------------------------------------------------------- */
+
+.panel {
+  order: 1;
+  width: var(--panel-w);
+  padding: 14px 14px 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: var(--acrylic);
+  backdrop-filter: blur(48px) saturate(140%);
+  -webkit-backdrop-filter: blur(48px) saturate(140%);
+  box-shadow: var(--shadow-flyout);
+
+  transform-origin: right center;
+  transform: scale(0.90) translateX(14px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform var(--normal) var(--ease),
+    opacity   var(--fast)   var(--ease),
+    visibility 0s linear var(--normal);
+}
+
+.dock[data-state="open"] .panel {
+  transform: scale(1) translateX(0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    transform var(--normal) var(--ease),
+    opacity   var(--fast)   var(--ease),
+    visibility 0s;
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.panel__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.panel__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.panel__name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel__meta {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.panel__close {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.panel__close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.panel__close:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+
+.panel__body { margin-bottom: 12px; }
+
+.panel__msg {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-height: 4.5em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.panel__more {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* ---------------------------------------------------------------
+   Le champ de réponse
+   --------------------------------------------------------------- */
+
+.reply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 3px 3px 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+.reply:focus-within {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.reply__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+
+.reply__input::placeholder { color: var(--text-3); }
+
+.reply__send {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+/* L'accent n'apparaît qu'au moment où il y a quelque chose à envoyer. */
+.reply__send:not(:disabled) { background: var(--accent); color: #05300f; }
+.reply__send:not(:disabled):hover { background: var(--accent-deep); }
+.reply__send:disabled { cursor: default; }
+.reply__send:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.panel__status {
+  margin: 9px 2px 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.panel__status[data-tone="error"] { color: #ff99a0; }
+
+/* ---------------------------------------------------------------
+   Bandeau d'aperçu (navigateur uniquement)
+   --------------------------------------------------------------- */
+
+.devbar {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.8);
+  backdrop-filter: blur(20px);
+  color: var(--text-3);
+  font-size: 12px;
+  z-index: 50;
+}
+
+.devbar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d0813a;
+}
+
+.devbar__dot[data-live="1"] { background: var(--accent); }
+
+.devbar button {
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.devbar button:hover { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+
+/* --------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
