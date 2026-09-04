@@ -15,7 +15,10 @@ if (window.__overlayJsRan) {
 } else {
 window.__overlayJsRan = true;
 
-const WS_URL = 'ws://127.0.0.1:8787';
+// Secours pour l'aperçu navigateur uniquement : sous Tauri, le port et
+// le jeton réels sont découverts dynamiquement (voir connect()) — le
+// connecteur n'écoute plus sur un port fixe.
+const DEFAULT_WS_URL = 'ws://127.0.0.1:8787';
 const DORMANT_AFTER = 12000;   // retour au repos si l'utilisateur n'a rien fait
 
 const el = {
@@ -44,6 +47,14 @@ const el = {
 let queue = [];
 let socket = null;
 let dormantTimer = null;
+
+/** État du connecteur : 'ok' | 'down' (WS injoignable) | 'expired' (session WhatsApp révoquée). */
+let connectorState = 'ok';
+
+function setConnectorState(state) {
+  connectorState = state;
+  el.dock.dataset.connector = state;
+}
 
 const isTauri = Boolean(window.__TAURI__);
 if (isTauri) document.body.classList.add('is-tauri');
@@ -115,7 +126,12 @@ function render() {
 
 function openPanel() {
   const latest = queue[queue.length - 1];
-  if (!latest) return;
+
+  if (!latest) {
+    if (connectorState === 'ok') return;   // rien en attente, rien à signaler
+    showConnectorPanel();
+    return;
+  }
 
   el.panelAvatar.src = avatarFor(latest);
   el.panelAvatar.alt = '';
@@ -135,6 +151,26 @@ function openPanel() {
   setState('open');
   clearTimeout(dormantTimer);
   requestAnimationFrame(() => el.input.focus());
+  syncHitRegion();
+}
+
+/** Panneau affiché à la place d'un message quand il n'y a rien en
+    attente mais que le connecteur ne va pas bien — la bulle grise
+    doit pouvoir s'expliquer d'un clic, sans qu'on ait besoin d'aller
+    chercher un terminal. */
+function showConnectorPanel() {
+  el.panelAvatar.src = fallbackAvatar('');
+  el.panelAvatar.alt = '';
+  el.name.textContent = 'Bulle';
+  el.meta.textContent = '';
+  el.msg.textContent = connectorState === 'down'
+    ? 'Connecteur injoignable. Vérifiez qu\'il tourne, puis réessayez dans quelques secondes.'
+    : 'Session WhatsApp expirée. Relancez le connecteur et scannez un nouveau QR code.';
+  el.more.hidden = true;
+
+  clearStatus();
+  setState('open');
+  clearTimeout(dormantTimer);
   syncHitRegion();
 }
 
@@ -236,13 +272,37 @@ function onSent(res) {
    Connexion au connecteur
    --------------------------------------------------------------- */
 
-function connect() {
-  try { socket = new WebSocket(WS_URL); }
+async function connect() {
+  let wsUrl = DEFAULT_WS_URL;
+  let token = null;
+
+  // Sous Tauri, le connecteur choisit un port libre et un jeton à
+  // chaque lancement (voir connector/index.js) — on va les chercher
+  // via Rust plutôt que de supposer un port fixe. Tant que le fichier
+  // de découverte n'existe pas, le connecteur n'a pas encore démarré.
+  if (isTauri) {
+    let info = null;
+    try { info = await window.__TAURI__.core.invoke('read_connector_info'); } catch {}
+    if (!info) {
+      setConnectorState('down');
+      setTimeout(connect, 3000);
+      return;
+    }
+    wsUrl = `ws://127.0.0.1:${info.port}`;
+    token = info.token;
+  }
+
+  try { socket = new WebSocket(wsUrl); }
   catch { return void setTimeout(connect, 3000); }
 
   socket.onopen = () => {
     el.devDot.dataset.live = '1';
     el.devLabel.textContent = 'Connecteur actif';
+    if (token) socket.send(JSON.stringify({ type: 'auth', token }));
+    // Le WS répond ; le vrai statut WhatsApp (connecté/expiré) arrive
+    // juste après via un message 'status'. On lève déjà le grisé du
+    // "connecteur injoignable" en attendant.
+    if (connectorState === 'down') setConnectorState('ok');
   };
 
   socket.onmessage = (ev) => {
@@ -252,7 +312,9 @@ function connect() {
     if (data.type === 'message')  incoming(data);
     if (data.type === 'sent')     onSent(data);
     if (data.type === 'qr')       setStatus('Scannez le QR code affiché dans le terminal.');
+    if (data.type === 'status' && data.state === 'connected') setConnectorState('ok');
     if (data.type === 'status' && data.state === 'disconnected') {
+      setConnectorState('expired');
       setStatus('WhatsApp déconnecté. Relancez le connecteur.', 'error');
     }
   };
@@ -261,6 +323,9 @@ function connect() {
     el.devDot.dataset.live = '0';
     el.devLabel.textContent = 'Aperçu — connecteur absent';
     socket = null;
+    // Seulement en Tauri : en aperçu navigateur, l'absence de connecteur
+    // est l'état normal, pas une panne à signaler.
+    if (isTauri) setConnectorState('down');
     setTimeout(connect, 3000);
   };
 

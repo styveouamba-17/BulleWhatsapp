@@ -19,20 +19,54 @@ import { Boom } from '@hapi/boom';
 import { WebSocketServer } from 'ws';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-const PORT = 8787;
 const AUTH_DIR = './auth';
 
+// Port choisi par l'OS et jeton à usage unique par lancement, plutôt
+// que 8787 en dur : un process tiers sur la même machine ne doit pas
+// pouvoir lire les messages ou envoyer en se contentant de se
+// connecter au bon port. L'overlay découvre les deux via ce fichier
+// (voir src-tauri/src/lib.rs, commande read_connector_info).
+const TOKEN = crypto.randomBytes(24).toString('hex');
+const RUNTIME_FILE = path.join(os.tmpdir(), 'bulle-connector.json');
+const AUTH_TIMEOUT_MS = 4000;
+
+function cleanupRuntimeFile() {
+  try { fs.rmSync(RUNTIME_FILE, { force: true }); } catch {}
+}
+process.on('exit', cleanupRuntimeFile);
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
+// Un widget qui meurt en silence est abandonné en une semaine (voir
+// PROJET.md, phase 3). Une exception isolée — un message malformé, un
+// appel réseau qui échoue hors des try/catch déjà en place — ne doit
+// pas emporter tout le connecteur : le serveur WS doit rester debout
+// pour que l'overlay puisse au moins afficher « connecteur injoignable ».
+process.on('uncaughtException', (err) => {
+  console.error('Erreur non interceptée (le connecteur continue) :', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Rejet de promesse non intercepté (le connecteur continue) :', err);
+});
+
 const log = pino({ level: 'warn' });
-const wss = new WebSocketServer({ host: '127.0.0.1', port: PORT });
+const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
 let sock = null;
+
+/** Clients ayant prouvé qu'ils connaissent le jeton — seuls destinataires des broadcasts. */
+const authedClients = new Set();
 
 /** Cache des photos de profil : une requête réseau par contact, pas par message. */
 const avatars = new Map();
 
 function broadcast(payload) {
   const raw = JSON.stringify(payload);
-  for (const client of wss.clients) {
+  for (const client of authedClients) {
     if (client.readyState === 1) client.send(raw);
   }
 }
@@ -162,9 +196,30 @@ async function start() {
    --------------------------------------------------------------- */
 
 wss.on('connection', (client) => {
+  const authTimer = setTimeout(() => {
+    if (!authedClients.has(client)) client.close();
+  }, AUTH_TIMEOUT_MS);
+
+  client.on('close', () => {
+    authedClients.delete(client);
+    clearTimeout(authTimer);
+  });
+
   client.on('message', async (raw) => {
     let cmd;
     try { cmd = JSON.parse(raw.toString()); } catch { return; }
+
+    // Premier message obligatoire : prouver qu'on connaît le jeton.
+    // Rien d'autre n'est traité tant que ce n'est pas fait.
+    if (!authedClients.has(client)) {
+      if (cmd.type === 'auth' && cmd.token === TOKEN) {
+        authedClients.add(client);
+        clearTimeout(authTimer);
+      } else {
+        client.close();
+      }
+      return;
+    }
 
     if (cmd.type === 'typing' && sock) {
       try { await sock.sendPresenceUpdate('composing', cmd.jid); } catch {}
@@ -188,8 +243,13 @@ wss.on('connection', (client) => {
   });
 });
 
-console.log(`Connecteur en écoute sur ws://127.0.0.1:${PORT}`);
-start().catch((err) => {
-  console.error('Démarrage impossible :', err);
-  process.exit(1);
+wss.on('listening', () => {
+  const { port } = wss.address();
+  fs.writeFileSync(RUNTIME_FILE, JSON.stringify({ port, token: TOKEN }), { mode: 0o600 });
+  console.log(`Connecteur en écoute sur ws://127.0.0.1:${port}`);
+
+  start().catch((err) => {
+    console.error('Démarrage impossible :', err);
+    process.exit(1);
+  });
 });

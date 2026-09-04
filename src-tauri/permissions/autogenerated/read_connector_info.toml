@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-connector-info"
+description = "Enables the read_connector_info command without any pre-configured scope."
+commands.allow = ["read_connector_info"]
+
+[[permission]]
+identifier = "deny-read-connector-info"
+description = "Denies the read_connector_info command without any pre-configured scope."
+commands.deny = ["read_connector_info"]

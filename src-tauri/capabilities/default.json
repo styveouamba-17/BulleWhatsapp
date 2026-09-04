@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "allow-sync-hit-region"
+    "allow-sync-hit-region",
+    "allow-read-connector-info"
   ]
 }

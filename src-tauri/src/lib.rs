@@ -132,6 +132,29 @@ fn sync_hit_region(
     };
 }
 
+/* ---------------------------------------------------------------
+   Découverte du connecteur
+   Le connecteur choisit un port libre et un jeton à chaque lancement
+   (voir connector/index.js) plutôt que le 8787 fixe d'origine, pour
+   qu'un autre process local ne puisse pas s'y connecter à l'aveugle.
+   Les deux processus n'ont pas de canal direct : le connecteur dépose
+   l'info dans un fichier du dossier temp système, que l'overlay vient
+   lire ici avant d'ouvrir le WebSocket.
+   --------------------------------------------------------------- */
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConnectorInfo {
+    port: u16,
+    token: String,
+}
+
+#[tauri::command]
+fn read_connector_info() -> Option<ConnectorInfo> {
+    let path = std::env::temp_dir().join("bulle-connector.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 #[cfg(target_os = "windows")]
 fn spawn_click_through_watcher(window: WebviewWindow, region: SharedHitRegion) {
     use windows_sys::Win32::Foundation::POINT;
@@ -178,7 +201,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(region.clone())
-        .invoke_handler(tauri::generate_handler![sync_hit_region])
+        .invoke_handler(tauri::generate_handler![sync_hit_region, read_connector_info])
         .setup(move |app| {
             let window = app
                 .get_webview_window("main")
