@@ -42,6 +42,7 @@ const el = {
   devFire:     document.getElementById('devFire'),
   ctxmenu:     document.getElementById('ctxmenu'),
   ctxMute:     document.getElementById('ctxMute'),
+  ctxAutostart:document.getElementById('ctxAutostart'),
   senders:     document.getElementById('senders'),
 };
 
@@ -521,6 +522,23 @@ el.ctxMute.addEventListener('click', () => {
   applyMuted();
   closeCtxMenu();
 });
+
+/* Démarrage automatique — sans objet en aperçu navigateur. */
+if (isTauri) {
+  el.ctxAutostart.hidden = false;
+  window.__TAURI__.core.invoke('plugin:autostart|is_enabled')
+    .then((enabled) => el.ctxAutostart.setAttribute('aria-checked', String(enabled)))
+    .catch(() => {});
+
+  el.ctxAutostart.addEventListener('click', async () => {
+    const enabled = el.ctxAutostart.getAttribute('aria-checked') === 'true';
+    try {
+      await window.__TAURI__.core.invoke(enabled ? 'plugin:autostart|disable' : 'plugin:autostart|enable');
+      el.ctxAutostart.setAttribute('aria-checked', String(!enabled));
+    } catch {}
+    closeCtxMenu();
+  });
+}
 
 document.addEventListener('pointerdown', (e) => {
   if (!el.ctxmenu.hidden && !el.ctxmenu.contains(e.target)) closeCtxMenu();

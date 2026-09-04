@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "allow-sync-hit-region",
-    "allow-read-connector-info"
+    "allow-read-connector-info",
+    "autostart:default"
   ]
 }

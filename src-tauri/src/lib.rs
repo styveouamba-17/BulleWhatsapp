@@ -200,6 +200,10 @@ pub fn run() {
     let region: SharedHitRegion = Arc::new(Mutex::new(HitRegion::default()));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(region.clone())
         .invoke_handler(tauri::generate_handler![sync_hit_region, read_connector_info])
         .setup(move |app| {
