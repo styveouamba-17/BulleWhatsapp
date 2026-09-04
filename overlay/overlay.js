@@ -30,6 +30,7 @@ const el = {
   panelAvatar: document.getElementById('panelAvatar'),
   name:        document.getElementById('panelName'),
   meta:        document.getElementById('panelMeta'),
+  qr:          document.getElementById('panelQr'),
   msg:         document.getElementById('panelMsg'),
   more:        document.getElementById('panelMore'),
   input:       document.getElementById('replyInput'),
@@ -53,8 +54,12 @@ let dormantTimer = null;
     arrivé : on peut choisir à qui répondre parmi ceux qui attendent. */
 let selectedJid = null;
 
-/** État du connecteur : 'ok' | 'down' (WS injoignable) | 'expired' (session WhatsApp révoquée). */
+/** État du connecteur : 'ok' | 'down' (WS injoignable) | 'expired' (session
+    WhatsApp révoquée) | 'pairing' (QR à scanner). */
 let connectorState = 'ok';
+
+/** Dernier QR reçu (data URL PNG), tant qu'il n'a pas été scanné. */
+let pairingQr = null;
 
 function setConnectorState(state) {
   connectorState = state;
@@ -247,10 +252,18 @@ function showConnectorPanel() {
   el.panelAvatar.alt = '';
   el.name.textContent = 'Bulle';
   el.meta.textContent = '';
-  el.msg.textContent = connectorState === 'down'
-    ? 'Connecteur injoignable. Vérifiez qu\'il tourne, puis réessayez dans quelques secondes.'
-    : 'Session WhatsApp expirée. Relancez le connecteur et scannez un nouveau QR code.';
   el.more.hidden = true;
+
+  if (connectorState === 'pairing' && pairingQr) {
+    el.qr.src = pairingQr;
+    el.qr.hidden = false;
+    el.msg.textContent = 'Scannez depuis le téléphone : WhatsApp › Réglages › Appareils liés › Lier un appareil.';
+  } else {
+    el.qr.hidden = true;
+    el.msg.textContent = connectorState === 'down'
+      ? 'Connecteur injoignable. Vérifiez qu\'il tourne, puis réessayez dans quelques secondes.'
+      : 'Session WhatsApp expirée. Relancez le connecteur et scannez un nouveau QR code.';
+  }
 
   clearStatus();
   setState('open');
@@ -405,9 +418,21 @@ async function connect() {
 
     if (data.type === 'message')  incoming(data);
     if (data.type === 'sent')     onSent(data);
-    if (data.type === 'qr')       setStatus('Scannez le QR code affiché dans le terminal.');
-    if (data.type === 'status' && data.state === 'connected') setConnectorState('ok');
+
+    if (data.type === 'qr' && data.dataUrl) {
+      pairingQr = data.dataUrl;
+      setConnectorState('pairing');
+      // QR déjà à l'écran (il se renouvelle toutes les ~20-60s tant
+      // qu'il n'est pas scanné) : on le rafraîchit sans rouvrir/fermer.
+      if (el.dock.dataset.state === 'open' && !queue.length) showConnectorPanel();
+    }
+
+    if (data.type === 'status' && data.state === 'connected') {
+      pairingQr = null;
+      setConnectorState('ok');
+    }
     if (data.type === 'status' && data.state === 'disconnected') {
+      pairingQr = null;
       setConnectorState('expired');
       setStatus('WhatsApp déconnecté. Relancez le connecteur.', 'error');
     }

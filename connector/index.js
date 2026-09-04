@@ -17,7 +17,8 @@ import makeWASocket, {
 } from 'baileys';
 import { Boom } from '@hapi/boom';
 import { WebSocketServer } from 'ws';
-import qrcode from 'qrcode-terminal';
+import qrcodeTerminal from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import pino from 'pino';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -145,9 +146,17 @@ async function start() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      // Le terminal reste utile en dev (npm start lancé à la main) ;
+      // l'image sert à l'écran de configuration dans l'overlay.
       console.log('\nScannez ce code depuis WhatsApp › Appareils liés :\n');
-      qrcode.generate(qr, { small: true });
-      broadcast({ type: 'qr' });
+      qrcodeTerminal.generate(qr, { small: true });
+      QRCode.toDataURL(qr, {
+        margin: 2,
+        width: 240,
+        color: { dark: '#000000', light: '#ffffff' },
+      })
+        .then((dataUrl) => broadcast({ type: 'qr', dataUrl }))
+        .catch((err) => console.error('Génération du QR impossible :', err?.message));
     }
 
     if (connection === 'open') {

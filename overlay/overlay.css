@@ -161,12 +161,14 @@ body.is-tauri .devbar { display: none; }
    rien n'arrive. Volontairement placé après la règle "dormant" pour
    rester visible même au repos. */
 .dock[data-connector="down"] .bubble,
-.dock[data-connector="expired"] .bubble {
+.dock[data-connector="expired"] .bubble,
+.dock[data-connector="pairing"] .bubble {
   filter: grayscale(1);
   opacity: 0.55;
 }
 .dock[data-connector="down"] .bubble:hover,
-.dock[data-connector="expired"] .bubble:hover {
+.dock[data-connector="expired"] .bubble:hover,
+.dock[data-connector="pairing"] .bubble:hover {
   opacity: 0.9;
 }
 
@@ -375,6 +377,16 @@ body.is-tauri .devbar { display: none; }
 .panel__close:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
 
 .panel__body { margin-bottom: 12px; }
+
+.panel__qr {
+  display: block;
+  width: 168px;
+  height: 168px;
+  margin: 2px auto 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #fff;   /* contraste garanti, indépendant du thème sombre */
+}
 
 .panel__msg {
   margin: 0;
