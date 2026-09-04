@@ -78,8 +78,18 @@ Chacun coûte une soirée si on tombe dedans.
 ## Sécurité
 
 Le dossier `./auth` contient une **session active sur le WhatsApp personnel de
-l'utilisateur**. Il est dans `.gitignore` et doit y rester. À terme, le chiffrer
-avec DPAPI (`CryptProtectData`) ou le plugin Stronghold de Tauri.
+l'utilisateur**. Il est dans `.gitignore` et doit y rester.
+
+Chiffré au repos via DPAPI (`connector/authCrypt.js`) : à l'arrêt propre du
+connecteur (SIGINT/SIGTERM), `auth/` est archivé, chiffré avec
+`ProtectedData.Protect` (portée `CurrentUser`, via PowerShell — pas de
+dépendance npm native), et le dossier en clair est effacé. Déchiffré
+automatiquement au démarrage suivant. **Limite assumée : ça ne protège
+qu'entre deux lancements.** Un arrêt brutal (crash, `taskkill /F`, coupure de
+courant) laisse `auth/` en clair — les handlers `exit` de Node ne se déclenchent
+jamais sur une terminaison forcée, sur aucun OS. `useMultiFileAuthState` n'a
+volontairement pas été touché (le remplacer pour chiffrer à la volée aurait été
+plus risqué pour une session bien réelle).
 
 L'écosystème npm autour de Baileys est infesté de forks malveillants — certains
 proposent d'aliaser `@whiskeysockets/baileys` vers leur propre paquet dans le
@@ -151,10 +161,8 @@ production, seulement un outil de réglage visuel.
    commande, l'overlay ne l'émet pas encore.
 6. **Écran de configuration** : afficher le QR dans l'interface plutôt que dans
    le terminal.
-7. **Chiffrer `connector/auth/`** (DPAPI ou plugin Stronghold de Tauri).
-   `useMultiFileAuthState` de Baileys lit/écrit ces fichiers directement ; il
-   faudra le remplacer par une implémentation équivalente qui chiffre/déchiffre
-   à la volée plutôt que de bricoler un chiffrement après coup.
+7. ~~Chiffrer `connector/auth/`~~ — fait, voir §Sécurité. Ne couvre que l'arrêt
+   propre, pas un crash ou un kill forcé.
 
 ## Design
 

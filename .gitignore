@@ -1,4 +1,5 @@
 connector/auth/
+connector/auth.enc
 node_modules/
 *.log
 src-tauri/target/

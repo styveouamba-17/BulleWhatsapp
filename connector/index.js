@@ -23,8 +23,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { sealAuthDir, unsealAuthDir } from './authCrypt.js';
 
 const AUTH_DIR = './auth';
+const AUTH_ENC_FILE = './auth.enc';
 
 // Port choisi par l'OS et jeton à usage unique par lancement, plutôt
 // que 8787 en dur : un process tiers sur la même machine ne doit pas
@@ -38,7 +40,22 @@ const AUTH_TIMEOUT_MS = 4000;
 function cleanupRuntimeFile() {
   try { fs.rmSync(RUNTIME_FILE, { force: true }); } catch {}
 }
+
+// Le dossier auth/ contient la session WhatsApp du compte personnel de
+// l'utilisateur (voir CLAUDE.md, §Sécurité). Chiffré au repos via DPAPI
+// entre deux lancements — voir connector/authCrypt.js pour les limites
+// de cette protection (rien ne couvre un arrêt brutal).
+try { unsealAuthDir(AUTH_DIR, AUTH_ENC_FILE); } catch (err) {
+  console.error('Déchiffrement de auth/ impossible, poursuite avec ce qui existe :', err?.message);
+}
+function sealAuthOnExit() {
+  try { sealAuthDir(AUTH_DIR, AUTH_ENC_FILE); } catch (err) {
+    console.error('Chiffrement de auth/ à la fermeture impossible :', err?.message);
+  }
+}
+
 process.on('exit', cleanupRuntimeFile);
+process.on('exit', sealAuthOnExit);
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
 

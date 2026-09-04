@@ -67,13 +67,18 @@ npm run reset
 - **Phase 2 — Vraie fenêtre (Tauri)** : faite — bande transparente ancrée au
   bord droit, toujours au-dessus, hors barre des tâches, focus bloqué,
   clic-through natif en dehors de la bulle.
-- **Phase 3 — Fiabilité** : partielle. Fait : indicateur visuel de panne
+- **Phase 3 — Fiabilité** : quasi complète. Fait : indicateur visuel de panne
   (bulle grisée quand le connecteur est injoignable ou la session WhatsApp
   révoquée), le connecteur ne meurt plus sur une exception isolée, port
-  aléatoire + jeton à la place du 8787 en dur. Pas fait : redémarrage
-  automatique si le process connecteur meurt entièrement, chiffrement de
-  `connector/auth/`.
+  aléatoire + jeton à la place du 8787 en dur, chiffrement au repos de
+  `connector/auth/` (DPAPI, entre deux lancements). Pas fait : redémarrage
+  automatique si le process connecteur meurt entièrement — reporté à la
+  phase 4, plus naturel une fois le connecteur en sidecar supervisé par
+  Tauri.
 - **Phase 4 — Installable** : pas commencée.
+
+En bonus, hors plan initial : possibilité de choisir à qui répondre quand
+plusieurs expéditeurs sont en attente (rangée d'avatars dans le panneau).
 
 La liste complète, les décisions déjà prises et les pièges à ne pas
 retraverser sont dans `CLAUDE.md`.
