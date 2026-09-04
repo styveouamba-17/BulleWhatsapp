@@ -201,6 +201,7 @@ function renderThreadContent() {
   const latest = [...queue].reverse().find(m => m.jid === selectedJid);
   if (!latest) return;
 
+  el.qr.hidden = true;   // un vrai message a la priorité sur l'écran de pairage
   el.panelAvatar.src = avatarFor(latest);
   el.panelAvatar.alt = '';
   el.name.textContent = latest.from;
