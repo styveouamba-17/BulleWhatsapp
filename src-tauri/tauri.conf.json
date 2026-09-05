@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.bulle.app",
   "build": {
-    "frontendDist": "../overlay"
+    "frontendDist": "../overlay",
+    "beforeDevCommand": "node scripts/build-sidecar.mjs",
+    "beforeBuildCommand": "node scripts/build-sidecar.mjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -31,6 +33,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/bulle-connector"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

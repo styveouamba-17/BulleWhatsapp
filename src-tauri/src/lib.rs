@@ -2,6 +2,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, WebviewWindow};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
 
 /// Largeur de la bande ancrée au bord droit de l'écran : assez pour la
 /// bulle, le panneau déplié et une marge — voir --panel-w / --bubble-size
@@ -195,15 +199,67 @@ fn spawn_click_through_watcher(window: WebviewWindow, region: SharedHitRegion) {
 #[cfg(not(target_os = "windows"))]
 fn spawn_click_through_watcher(_window: WebviewWindow, _region: SharedHitRegion) {}
 
+/* ---------------------------------------------------------------
+   Sidecar — le connecteur
+   Compilé en exécutable unique par bun (voir scripts/build-sidecar.mjs)
+   et déclaré en externalBin dans tauri.conf.json : un seul installeur,
+   un process qui meurt avec l'app plutôt qu'un `node index.js` séparé
+   à lancer à la main.
+
+   Relancé automatiquement s'il meurt (crash, tué de l'extérieur) —
+   c'était le morceau de la phase 3 laissé de côté, plus naturel une
+   fois le connecteur géré ici plutôt qu'en process indépendant.
+   --------------------------------------------------------------- */
+
+type SharedConnectorChild = Arc<Mutex<Option<CommandChild>>>;
+
+fn spawn_connector_sidecar(app: tauri::AppHandle, child_state: SharedConnectorChild) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let sidecar = match app.shell().sidecar("bulle-connector") {
+                Ok(cmd) => cmd,
+                Err(err) => {
+                    eprintln!("Sidecar bulle-connector introuvable : {err}");
+                    return;
+                }
+            };
+
+            let (mut rx, child) = match sidecar.spawn() {
+                Ok(pair) => pair,
+                Err(err) => {
+                    eprintln!("Démarrage du connecteur impossible : {err}");
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    continue;
+                }
+            };
+            *child_state.lock().expect("connector child mutex empoisonné") = Some(child);
+
+            while let Some(event) = rx.recv().await {
+                if matches!(event, CommandEvent::Terminated(_)) {
+                    break;
+                }
+            }
+            *child_state.lock().expect("connector child mutex empoisonné") = None;
+
+            // Laisse un souffle avant de relancer, pour ne pas boucler à
+            // vide si le connecteur meurt immédiatement au démarrage.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let region: SharedHitRegion = Arc::new(Mutex::new(HitRegion::default()));
+    let connector_child: SharedConnectorChild = Arc::new(Mutex::new(None));
+    let connector_child_for_exit = connector_child.clone();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_shell::init())
         .manage(region.clone())
         .invoke_handler(tauri::generate_handler![sync_hit_region, read_connector_info])
         .setup(move |app| {
@@ -220,8 +276,26 @@ pub fn run() {
             let _ = window.show();
             apply_noactivate(&window);
 
+            spawn_connector_sidecar(app.handle().clone(), connector_child.clone());
+
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(move |_app_handle, event| {
+        // Un kill forcé (Task Manager, taskkill /F) ne passe jamais par
+        // ici — même limite que côté connecteur (voir authCrypt.js) : ça
+        // laisse le sidecar orphelin. Rien à faire de plus sans détecter
+        // ce cas depuis l'extérieur du process lui-même.
+        if let tauri::RunEvent::Exit = event {
+            if let Some(child) = connector_child_for_exit
+                .lock()
+                .expect("connector child mutex empoisonné")
+                .take()
+            {
+                let _ = child.kill();
+            }
+        }
+    });
 }
