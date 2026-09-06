@@ -269,6 +269,85 @@ body.is-tauri .devbar { display: none; }
 }
 
 /* ---------------------------------------------------------------
+   Aperçu éclair — une ligne qui s'entrouvre à l'arrivée d'un message
+   et se rétracte seule. Ni une notification système, ni le panneau :
+   juste de quoi lire sans avoir à cliquer, dans le même espace que le
+   panneau (jamais affichée en même temps que lui).
+   --------------------------------------------------------------- */
+
+.peek {
+  position: absolute;
+  right: calc(var(--bubble-size) + 10px);
+  top: 50%;
+  width: var(--panel-w);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: var(--acrylic);
+  backdrop-filter: blur(48px) saturate(140%);
+  -webkit-backdrop-filter: blur(48px) saturate(140%);
+  box-shadow: var(--shadow-flyout);
+  cursor: pointer;
+
+  transform-origin: right center;
+  transform: translateY(-50%) scale(0.92) translateX(10px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform var(--normal) var(--ease),
+    opacity   var(--fast)   var(--ease),
+    visibility 0s linear var(--normal);
+}
+
+.dock[data-peek="1"] .peek {
+  transform: translateY(-50%) scale(1) translateX(0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    transform var(--normal) var(--ease),
+    opacity   var(--fast)   var(--ease),
+    visibility 0s;
+}
+
+.peek__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.peek__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.peek__name {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.peek__text {
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------
    Qui attend — rangée d'expéditeurs en attente, quand il y en a
    plusieurs. Choisir, pas parcourir : plafonnée, sans recherche,
    disparaît dès qu'on a répondu ou fermé. Volontairement discret pour
@@ -276,11 +355,14 @@ body.is-tauri .devbar { display: none; }
    --------------------------------------------------------------- */
 
 .senders {
-  display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
 }
+
+/* Même piège que .panel__qr : sans ce garde, `hidden` (posé quand il y a
+   moins de 2 expéditeurs) n'aurait aucun effet visuel. */
+.senders:not([hidden]) { display: flex; }
 
 .senders__item {
   position: relative;
@@ -358,11 +440,11 @@ body.is-tauri .devbar { display: none; }
   line-height: 1.4;
 }
 
+.panel__mute,
 .panel__close {
   flex: 0 0 auto;
   width: 26px;
   height: 26px;
-  display: grid;
   place-items: center;
   padding: 0;
   border: 0;
@@ -370,22 +452,119 @@ body.is-tauri .devbar { display: none; }
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
-  transition: background var(--fast) var(--ease);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
+/* .panel__close n'est jamais masqué via [hidden], donc display:grid peut
+   rester inconditionnel pour lui ; .panel__mute l'est (showConnectorPanel),
+   d'où le même garde que .panel__qr plus haut. */
+.panel__close { display: grid; }
+.panel__mute:not([hidden]) { display: grid; }
+
+.panel__mute:hover,
 .panel__close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.panel__mute:focus-visible,
 .panel__close:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+
+/* Fil en sourdine : le bouton reste allumé pour qu'on se souvienne qu'on ne
+   sera plus averti pour ce fil, sans jamais toucher au vert (réservé). */
+.panel__mute-slash { opacity: 0; transition: opacity var(--fast) var(--ease); }
+.panel__mute[aria-pressed="true"] { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.panel__mute[aria-pressed="true"] .panel__mute-slash { opacity: 1; }
 
 .panel__body { margin-bottom: 12px; }
 
 .panel__qr {
-  display: block;
   width: 168px;
   height: 168px;
   margin: 2px auto 12px;
   padding: 10px;
   border-radius: 8px;
   background: #fff;   /* contraste garanti, indépendant du thème sombre */
+}
+
+/* `display` doit rester conditionné à [hidden] : une règle d'auteur qui le
+   fixerait inconditionnellement (même égale en spécificité) l'emporterait
+   sur le `display: none` de la feuille de style du navigateur pour
+   `[hidden]`, l'origine primant sur la spécificité — l'attribut `hidden`
+   posé en JS n'aurait alors plus aucun effet visuel. C'est ce qui faisait
+   rester la carte QR affichée (cassée) sur un vrai message malgré
+   `el.qr.hidden = true` dans renderThreadContent(). */
+.panel__qr:not([hidden]) { display: block; }
+
+.panel__media {
+  margin: 2px 0 12px;
+}
+
+.panel__media-image {
+  display: block;
+  width: min(100%, 240px);
+  max-height: 220px;
+  margin: 0 auto;
+  border-radius: 8px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.panel__media-video {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  margin: 0 auto;
+  border-radius: 8px;
+  background: #000;
+}
+
+/* Bouton transparent autour d'une image : l'ouvrir en grand dans la
+   visionneuse du système. */
+.panel__media-open {
+  display: block;
+  width: min(100%, 240px);
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 8px;
+}
+.panel__media-open .panel__media-image {
+  width: 100%;
+  transition: opacity var(--fast) var(--ease);
+}
+.panel__media-open:hover .panel__media-image { opacity: 0.88; }
+.panel__media-open:focus-visible {
+  outline: 1.5px solid var(--stroke-strong);
+  outline-offset: 2px;
+}
+
+/* Média à usage unique : affiché quand même (Bulle n'a pas de mémoire),
+   mais étiqueté — il n'est déjà plus sur le téléphone. */
+.panel__media-wrap {
+  position: relative;
+  width: min(100%, 240px);
+  margin: 0 auto;
+}
+.panel__media-wrap > .panel__media-open,
+.panel__media-wrap > .panel__media-image,
+.panel__media-wrap > .panel__media-video { width: 100%; }
+.panel__media-tag {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.panel__audio {
+  display: block;
+  width: 100%;
+  height: 40px;
 }
 
 .panel__msg {
@@ -400,31 +579,161 @@ body.is-tauri .devbar { display: none; }
   -webkit-box-orient: vertical;
 }
 
+/* Message dont on a choisi de voir le texte intégral : plus de clamp,
+   le panneau grandit pour le contenir (il n'a pas de hauteur fixe). */
+/* Borné plutôt qu'illimité : un pavé de texte démesuré ne doit pas pousser
+   le panneau plus bas que l'écran (la bulle peut être ancrée n'importe où
+   verticalement) — au-delà, ça défile dans le message plutôt que dans la
+   mise en page. */
+.panel__msg.is-expanded {
+  max-height: 220px;
+  overflow-y: auto;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* Lien dans un message. Pas d'accent : le vert WhatsApp reste réservé au
+   compteur et au bouton d'envoi. Un lien se distingue par le soulignement
+   et un texte plus vif que le corps du message. */
+.panel__link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--text-3);
+  cursor: pointer;
+  word-break: break-all;
+}
+.panel__link:hover { text-decoration-color: var(--text); }
+.panel__link:focus-visible {
+  outline: 1.5px solid var(--stroke-strong);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.panel__msg-toggle {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.panel__msg-toggle:hover,
+.panel__msg-toggle:focus-visible { color: var(--text); }
+
 .panel__more {
   margin: 6px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel__more:hover,
+.panel__more:focus-visible { color: var(--text); }
+.panel__more:not([hidden]) { display: block; }
+
+.panel__previous {
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--stroke);
+}
+
+.panel__previous:not([hidden]) { display: flex; }
+
+.panel__previous-item {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
   color: var(--text-3);
   font-size: 11.5px;
+  line-height: 1.4;
 }
+
+.panel__previous-item b {
+  flex: 0 0 auto;
+  max-width: 40%;
+  color: var(--text-2);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel__previous-item span {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Mention discrète quand le fil affiché vient d'être lu sur un autre
+   appareil : on ne coupe pas la réponse en cours, on informe juste.
+   `display` conditionné à [hidden] comme .panel__qr (voir la note
+   plus haut) — l'attribut `hidden` posé en JS doit rester décisif. */
+.panel__read-note {
+  margin: 8px 2px 0;
+  color: var(--text-3);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.panel__read-note:not([hidden]) { display: block; }
 
 /* ---------------------------------------------------------------
    Le champ de réponse
    --------------------------------------------------------------- */
 
 .reply {
-  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 3px 3px 12px;
+  gap: 4px;
+  padding: 3px;
   border: 1px solid var(--stroke-strong);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.045);
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 
+/* Même piège que .panel__qr : sans ce garde, `hidden` (posé par
+   showConnectorPanel(), tant qu'il n'y a pas de vrai message à répondre)
+   n'aurait aucun effet visuel. */
+.reply:not([hidden]) { display: flex; }
+
 .reply:focus-within {
   border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.075);
 }
+
+.reply__emoji {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.reply__emoji:hover,
+.reply__emoji[aria-expanded="true"] { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.reply__emoji:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 .reply__input {
   flex: 1 1 auto;
@@ -461,6 +770,42 @@ body.is-tauri .devbar { display: none; }
 .reply__send:disabled { cursor: default; }
 .reply__send:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
+/* ---------------------------------------------------------------
+   Palette d'emojis — s'ouvre dans le panneau lui-même, juste au-dessus
+   de la barre de réponse : pas de flyout séparé, donc rien à ajouter
+   côté zone cliquable Tauri (le rectangle du panneau la couvre déjà).
+   Volontairement une petite palette courante, pas un clavier complet.
+   --------------------------------------------------------------- */
+
+.emoji {
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.emoji:not([hidden]) { display: grid; }
+
+.emoji__btn {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.emoji__btn:hover,
+.emoji__btn:focus-visible { background: rgba(255, 255, 255, 0.08); }
+
 .panel__status {
   margin: 9px 2px 0;
   color: var(--text-3);
@@ -468,6 +813,7 @@ body.is-tauri .devbar { display: none; }
 }
 
 .panel__status[data-tone="error"] { color: #ff99a0; }
+.panel__status[data-tone="success"] { color: var(--text-2); }
 
 /* ---------------------------------------------------------------
    Menu contextuel — clic droit sur la bulle
@@ -486,7 +832,6 @@ body.is-tauri .devbar { display: none; }
 }
 
 .ctxmenu__item {
-  display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -502,6 +847,11 @@ body.is-tauri .devbar { display: none; }
   cursor: pointer;
 }
 
+/* Même piège que .panel__qr : `display` ne doit s'imposer que si l'élément
+   n'est pas [hidden], sinon `#ctxAutostart` (masqué en aperçu navigateur,
+   affiché seulement sous Tauri) resterait visible malgré `hidden`. */
+.ctxmenu__item:not([hidden]) { display: flex; }
+
 .ctxmenu__item:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
 .ctxmenu__item:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
 
@@ -516,6 +866,21 @@ body.is-tauri .devbar { display: none; }
 .ctxmenu__item[aria-checked="true"] .ctxmenu__check {
   border-color: var(--text-2);
   background: var(--text-2);
+}
+
+.ctxmenu__muted {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--stroke);
+}
+
+.ctxmenu__heading {
+  padding: 5px 10px 3px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 /* ---------------------------------------------------------------

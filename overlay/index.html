@@ -47,6 +47,16 @@
         <span class="panel__name" id="panelName">—</span>
         <span class="panel__meta" id="panelMeta"></span>
       </div>
+      <button class="panel__mute" id="panelMute" type="button"
+              aria-pressed="false" aria-label="Mettre ce fil en sourdine" title="Mettre ce fil en sourdine">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M8 1.5c-1.4 0-2.5 1.1-2.5 2.5v.6C4.1 5.2 3 6.9 3 8.8V11l-1 1.5h12L13 11V8.8c0-1.9-1.1-3.6-2.5-4.2V4c0-1.4-1.1-2.5-2.5-2.5Z"
+                fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
+          <path d="M6.2 13.2a1.8 1.8 0 0 0 3.6 0" fill="none" stroke="currentColor"
+                stroke-width="1.1" stroke-linecap="round"/>
+          <path class="panel__mute-slash" d="M2.5 2.5 L13.5 13.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      </button>
       <button class="panel__close" id="panelClose" type="button" aria-label="Fermer">
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
           <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor"
@@ -57,11 +67,27 @@
 
     <div class="panel__body">
       <img class="panel__qr" id="panelQr" alt="Code QR à scanner depuis WhatsApp" hidden>
+      <div class="panel__media" id="panelMedia" hidden></div>
       <p class="panel__msg" id="panelMsg"></p>
-      <p class="panel__more" id="panelMore" hidden></p>
+      <button type="button" class="panel__msg-toggle" id="panelMsgToggle" hidden>Voir plus</button>
+      <button type="button" class="panel__more" id="panelMore" hidden></button>
+      <div class="panel__previous" id="panelPrevious" hidden></div>
+      <p class="panel__read-note" id="panelReadNote" hidden>Lu sur un autre appareil</p>
     </div>
 
+    <div class="emoji" id="emojiPicker" hidden role="menu" aria-label="Emojis"></div>
+
     <div class="reply" id="reply">
+      <button class="reply__emoji" id="emojiToggle" type="button"
+              aria-label="Insérer un emoji" aria-expanded="false" title="Emoji">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.1"/>
+          <circle cx="5.6" cy="6.6" r="0.9" fill="currentColor"/>
+          <circle cx="10.4" cy="6.6" r="0.9" fill="currentColor"/>
+          <path d="M5 9.4c0.7 1.1 1.8 1.7 3 1.7s2.3-0.6 3-1.7" fill="none"
+                stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+        </svg>
+      </button>
       <input class="reply__input" id="replyInput" type="text"
              placeholder="Répondre" autocomplete="off" spellcheck="false"
              aria-label="Votre réponse">
@@ -75,6 +101,16 @@
 
     <p class="panel__status" id="panelStatus" role="status" hidden></p>
   </section>
+
+  <!-- Aperçu éclair : une ligne qui s'entrouvre à l'arrivée d'un message et se
+       rétracte seule, sans ouvrir le panneau complet ni voler le focus. -->
+  <div class="peek" id="peek" role="status">
+    <img class="peek__avatar" id="peekAvatar" alt="">
+    <div class="peek__body">
+      <span class="peek__name" id="peekName"></span>
+      <span class="peek__text" id="peekText"></span>
+    </div>
+  </div>
 </div>
 
 <!-- Menu contextuel : clic droit sur la bulle -->
@@ -87,6 +123,7 @@
     <span class="ctxmenu__check" aria-hidden="true"></span>
     Démarrer avec Windows
   </button>
+  <div class="ctxmenu__muted" id="ctxMutedList" hidden></div>
 </div>
 
 <!-- Bandeau d'aperçu : uniquement hors Tauri -->
@@ -96,6 +133,7 @@
   <button type="button" id="devFire">Simuler un message</button>
 </div>
 
+<script src="linkify.js"></script>
 <script src="overlay.js"></script>
 </body>
 </html>

@@ -55,10 +55,31 @@ qu'on travaille.
 
 **Aucun accusé de lecture.** Ouvrir la bulle ne doit pas marquer la
 conversation comme lue sur le téléphone, sinon on perd les messages qu'on
-comptait traiter plus tard.
+comptait traiter plus tard. L'inverse, en revanche, est câblé : quand un fil
+est lu ou répondu depuis un autre appareil (téléphone, WhatsApp Web), le
+connecteur émet `{type:'read', jid}` et l'overlay vide ce fil de sa file.
+Bulle *réagit* à une lecture faite ailleurs, elle n'en *émet* jamais. Signaux
+côté connecteur : `chats.update` dont le `unreadCount` retombe à 0 ; un accusé
+`message-receipt.update` portant un `readTimestamp` dont le `userJid` est le
+nôtre (`sameUser`, suffixe `:device` ignoré) ; et tout message `key.fromMe` en
+`notify` (une réponse envoyée du téléphone). Lequel de ces signaux remonte
+vraiment quand on *ouvre* un fil sur le téléphone sans y répondre n'est pas
+tranché — chacun logue `[lecture?] …` pour être relevé sur appareil réel
+(`npm start`, sortie visible), après quoi on garde le fiable et on retire
+l'instrumentation. `messages.update` est écouté mais jamais câblé à
+`signalRead` : son `status` concerne un destinataire lisant *notre* message,
+pas l'inverse. Si le panneau est ouvert sur ce fil précis, la file n'est pas
+touchée en direct — une mention « lu sur un autre appareil » s'affiche et la
+purge attend la fermeture, pour ne pas couper une réponse en cours.
 
 **`markOnlineOnConnect: false`.** Sinon WhatsApp cesse d'envoyer les push sur
 le téléphone, qui reste l'appareil principal de l'utilisateur.
+
+**Pas d'indicateur « en train d'écrire ».** Le connecteur sait déjà traiter
+la commande `{type:'typing', jid}` (`sendPresenceUpdate('composing', jid)`,
+correctement scopée par fil — plusieurs expéditeurs simultanés ne posent pas
+de problème technique), mais l'overlay ne l'émet jamais et ce n'est pas un
+oubli : valeur trop faible pour l'effort et la surface ajoutée.
 
 ## Les pièges Baileys
 
@@ -68,12 +89,54 @@ Chacun coûte une soirée si on tombe dedans.
    initiale. Filtrer sur `type !== 'notify'` — `'append'`, c'est l'historique.
    Sans ce filtre, la bulle reçoit des centaines de vieux messages au démarrage.
 2. **`key.fromMe`.** Les messages envoyés depuis le téléphone remontent aussi.
+   Ils ne rentrent pas dans la bulle, mais servent de signal « fil traité
+   ailleurs » (voir `{type:'read'}` plus bas) avant d'être ignorés.
 3. **`status@broadcast`** et `@newsletter` : à écarter.
 4. **La déconnexion 515 après le scan du QR** est normale et attendue.
    Reconnecter sur tout sauf `DisconnectReason.loggedOut` — sinon on boucle à
    l'infini sur un compte délié.
 5. **Les messages sans texte** (média nu, réaction, appel, accusé) n'ont pas
    leur place dans une bulle de réponse rapide. Les ignorer.
+6. **La génération du QR est asynchrone.** `QRCode.toDataURL(qr)` tourne en
+   arrière-plan pendant que `connection.update` continue d'émettre — la
+   déconnexion 515 (piège 4) crée une fenêtre où cette promesse peut se
+   résoudre *après* que la connexion soit passée à `'open'`. Sans garde, son
+   `.then()` réécrit alors `connectionState`/`latestQr` en `'pairing'` avec un
+   QR périmé, et plus rien ne l'efface tant que le connecteur tourne — chaque
+   nouveau client WebSocket se refait renvoyer un QR obsolète indéfiniment.
+   Garder une variable (`pendingQr`) qui retient le QR en cours d'encodage et
+   vérifier qu'elle n'a pas changé avant d'appliquer le résultat.
+7. **Le mimetype audio contient un espace.** `audioMessage.mimetype` vaut
+   `"audio/ogg; codecs=opus"` (constante Baileys elle-même). Injecté tel quel
+   dans une data URL (`data:${mime};base64,...`), l'espace brut n'est pas un
+   caractère valide dans une URL : le navigateur le pourcent-encode à la
+   volée et le `<audio>` ne reconnaît plus le type, échec silencieux à la
+   lecture. Les mimetypes image/sticker n'ont pas ce paramètre, d'où un bug
+   qui ne touche que l'audio. Retirer les espaces du mimetype avant de
+   construire la data URL.
+8. **Les enveloppes `viewOnceMessage*` et `ephemeralMessage`.** Une photo à
+   usage unique arrive sous `message.viewOnceMessageV2.message.imageMessage`
+   (ou `viewOnceMessage`, `viewOnceMessageV2Extension`) ; un fil en messages
+   éphémères enveloppe *tous* ses messages sous `message.ephemeralMessage.
+   message.*`. Sans déballage, `extractText`/`mediaFor` renvoient `null` et le
+   message est ignoré en silence — texte compris pour les fils éphémères. Les
+   deux enveloppes peuvent s'imbriquer. `downloadMediaMessage` ne sait pas
+   déballer : lui passer une copie du message dont `.message` est le contenu
+   déballé. Voir `connector/messages.js` (`unwrapMessage`, `isViewOnce`) et
+   `messages.test.mjs`.
+
+## Analyse d'un message
+
+`connector/messages.js` isole les fonctions pures — `unwrapMessage`,
+`isViewOnce`, `extractText`, `mediaFor` — pour qu'elles soient testables sans
+réseau ni Baileys live (`node --test connector/messages.test.mjs`). `index.js`
+ne fait plus que les câbler au flux et télécharger le média.
+
+Types de média reconnus : `image`, `sticker`, `audio`, `video`. Le champ
+`media` du protocole porte `{kind, mime, dataUrl, viewOnce?}` — `viewOnce`
+n'est présent (à `true`) que pour un média à usage unique, que l'overlay
+affiche quand même (Bulle n'a pas de mémoire, il s'efface avec la file) mais
+étiquette « vue unique » puisqu'il n'est déjà plus sur le téléphone.
 
 ## Sécurité
 
@@ -118,8 +181,9 @@ Le protocole entre les deux, volontairement minuscule :
 
 | Sens | Message |
 |---|---|
-| connecteur → overlay | `{type:'message', jid, from, text, avatar, at, group}` |
+| connecteur → overlay | `{type:'message', jid, from, text, avatar, at, group, media?}` — `media` = `{kind:'image'\|'sticker'\|'audio'\|'video', mime, dataUrl, viewOnce?}` |
 | connecteur → overlay | `{type:'sent', ok, error?}` · `{type:'qr'}` · `{type:'status', state}` |
+| connecteur → overlay | `{type:'read', jid}` — ce fil a été lu ou répondu sur un autre appareil |
 | overlay → connecteur | `{type:'auth', token}` (obligatoire en premier message) |
 | overlay → connecteur | `{type:'reply', jid, text}` · `{type:'typing', jid}` |
 
@@ -136,6 +200,19 @@ sans Tauri) ne peut plus parler au vrai connecteur, il n'a pas accès à cette
 commande. C'est un renoncement assumé : ce mode n'a jamais été le chemin de
 production, seulement un outil de réglage visuel.
 
+Un lien reçu et une image agrandie sortent de la bulle, jamais dans la
+WebView : commandes Rust `open_url` (navigateur par défaut, http(s)
+uniquement, revérifié côté Rust) et `open_media` (écrit le média dans
+`<tmp>/bulle-media/`, l'ouvre dans la visionneuse du système ; dossier vidé à
+chaque appel et à la sortie — un fichier encore verrouillé par la visionneuse
+survit jusqu'au nettoyage suivant, limite assumée). Toute commande custom doit
+être déclarée à la fois dans `build.rs` (`AppManifest::commands`) et dans
+`capabilities/default.json` (`allow-<commande>`). Le repérage des liens dans le
+texte est une fonction pure, `overlay/linkify.js` (`parseLinks`), testée
+(`overlay/linkify.test.mjs`) ; l'overlay construit les nœuds `<a>` à partir des
+jetons — jamais d'`innerHTML`. Le vert WhatsApp ne s'étend pas aux liens : ils
+se distinguent par le soulignement.
+
 ## Ce qui reste à faire
 
 1. ~~Empaqueter en Tauri~~ — fait. Bande transparente ancrée au bord droit,
@@ -148,24 +225,33 @@ production, seulement un outil de réglage visuel.
    coupe tous les événements souris de la fenêtre, pas juste une région, donc un
    mousemove JS ne peut pas détecter le retour du curseur une fois le
    passthrough actif.
-2. **Déclarer le connecteur en sidecar** (`externalBin`) pour n'avoir qu'un
-   installeur et un process qui meurt avec l'app. Compiler le Node en exe unique
-   avec `bun build --compile`. C'est aussi ce qui donnera un vrai redémarrage
-   automatique si le connecteur meurt (le process actuel survit à ses propres
-   exceptions non interceptées, mais rien ne le relance s'il est tué de
-   l'extérieur).
+2. ~~Déclarer le connecteur en sidecar~~ — fait. `scripts/build-sidecar.mjs`
+   compile `connector/index.js` en exécutable unique avec `bun build --compile`
+   (nommé au triplet de cible Rust), lancé automatiquement avant
+   `tauri dev`/`tauri build` et déclaré en `bundle.externalBin`. Rust spawne le
+   sidecar via `tauri-plugin-shell` et le relance automatiquement s'il meurt
+   (crash, tué de l'extérieur) — un seul `.exe`, un seul arbre de process.
+   Limite assumée, identique à celle du chiffrement de `auth/` : un kill forcé
+   de `bulle.exe` (`Stop-Process -Force`) laisse le connecteur orphelin, car
+   aucun handler d'arrêt propre ne se déclenche sur une terminaison forcée.
+   Garde-fou pour ce cas (et pour un `node connector` lancé à la main resté en
+   fond) : un **verrou mono-instance** (`%APPDATA%/Bulle/connector.lock`,
+   contenant le PID — voir `connector/lock.js`). Au démarrage, si le PID du
+   verrou est encore vivant, la nouvelle instance ressort en code 0 sans rien
+   toucher (ni `auth/`, ni le fichier de découverte). Deux connecteurs sur la
+   même session Baileys se déconnectaient sinon mutuellement en boucle — c'est
+   la bulle qui vire au gris puis au vert sans arrêt. Un verrou périmé (PID
+   mort) est écrasé.
 3. ~~Port aléatoire + token~~ — fait, voir ci-dessus.
 4. ~~Indicateur de session expirée~~ — fait. La bulle grise
    (`data-connector="down"|"expired"` sur `.dock`) dès que le WS est injoignable
    ou que WhatsApp signale une déconnexion, visible sans ouvrir le panneau.
    Cliquer dessus sans message en attente affiche désormais le pourquoi au lieu
    de ne rien faire.
-5. **`sendPresenceUpdate('composing')`** quand l'utilisateur clique dans le
-   champ — le contact voit « en train d'écrire… ». Le connecteur gère déjà la
-   commande, l'overlay ne l'émet pas encore.
-6. **Écran de configuration** : afficher le QR dans l'interface plutôt que dans
-   le terminal.
-7. ~~Chiffrer `connector/auth/`~~ — fait, voir §Sécurité. Ne couvre que l'arrêt
+5. ~~Écran de configuration~~ — fait. Le QR s'affiche dans le panneau plutôt
+   que dans le terminal (voir piège Baileys n°6 pour le bug de course qui
+   pouvait le laisser affiché après connexion, corrigé).
+6. ~~Chiffrer `connector/auth/`~~ — fait, voir §Sécurité. Ne couvre que l'arrêt
    propre, pas un crash ou un kill forcé.
 
 ## Design

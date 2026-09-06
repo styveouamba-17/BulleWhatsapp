@@ -7,6 +7,8 @@
     "core:default",
     "allow-sync-hit-region",
     "allow-read-connector-info",
+    "allow-open-url",
+    "allow-open-media",
     "autostart:default"
   ]
 }

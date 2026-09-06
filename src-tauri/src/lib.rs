@@ -1,7 +1,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, WebviewWindow};
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    LogicalPosition, LogicalSize, Manager, Position, Size, WebviewWindow,
+};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -159,6 +164,68 @@ fn read_connector_info() -> Option<ConnectorInfo> {
     serde_json::from_str(&content).ok()
 }
 
+/* ---------------------------------------------------------------
+   Ouverture hors WebView
+   Un lien reçu ou une image agrandie sortent de la bulle : navigateur
+   et visionneuse du système, jamais dans la fenêtre du widget. Bulle
+   n'a pas de stockage — le fichier temporaire est éphémère.
+   --------------------------------------------------------------- */
+
+const MEDIA_TMP_SUBDIR: &str = "bulle-media";
+
+fn media_tmp_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(MEDIA_TMP_SUBDIR)
+}
+
+/// Ouvre une URL dans le navigateur par défaut. http(s) uniquement :
+/// l'overlay filtre déjà, on revérifie ici puisque la commande est
+/// exposée à la WebView.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("URL refusée".into());
+    }
+    open::that(&url).map_err(|e| e.to_string())
+}
+
+/// Écrit un média (data URL base64) dans un fichier temporaire et l'ouvre
+/// dans la visionneuse par défaut. Le dossier est vidé à chaque appel et
+/// à la sortie de l'app ; un fichier encore verrouillé par la visionneuse
+/// survivra jusqu'au prochain nettoyage — limite assumée.
+#[tauri::command]
+fn open_media(data_url: String, kind: String) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let payload = data_url
+        .split_once(";base64,")
+        .map(|(_, b64)| b64)
+        .ok_or("data URL invalide")?;
+    let bytes = STANDARD.decode(payload).map_err(|e| e.to_string())?;
+
+    let ext = match kind.as_str() {
+        "video" => "mp4",
+        "sticker" => "webp",
+        _ => "jpg",
+    };
+
+    let dir = media_tmp_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("{stamp}.{ext}"));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    open::that(&path).map_err(|e| e.to_string())
+}
+
 #[cfg(target_os = "windows")]
 fn spawn_click_through_watcher(window: WebviewWindow, region: SharedHitRegion) {
     use windows_sys::Win32::Foundation::POINT;
@@ -198,6 +265,28 @@ fn spawn_click_through_watcher(window: WebviewWindow, region: SharedHitRegion) {
 
 #[cfg(not(target_os = "windows"))]
 fn spawn_click_through_watcher(_window: WebviewWindow, _region: SharedHitRegion) {}
+
+/// Sans bordure, sans icône dans la barre des tâches, la bulle n'offre
+/// aucun moyen normal de fermer l'app — seule une icône dans la zone de
+/// notification permet de quitter proprement (et donc de déclencher
+/// RunEvent::Exit, qui tue le sidecar avec elle).
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&quit])?;
+
+    TrayIconBuilder::new()
+        .icon(Image::from_bytes(include_bytes!("../icons/32x32.png"))?)
+        .menu(&menu)
+        .tooltip("Bulle")
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "quit" {
+                app.exit(0);
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
 
 /* ---------------------------------------------------------------
    Sidecar — le connecteur
@@ -261,7 +350,12 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_shell::init())
         .manage(region.clone())
-        .invoke_handler(tauri::generate_handler![sync_hit_region, read_connector_info])
+        .invoke_handler(tauri::generate_handler![
+            sync_hit_region,
+            read_connector_info,
+            open_url,
+            open_media
+        ])
         .setup(move |app| {
             let window = app
                 .get_webview_window("main")
@@ -276,6 +370,7 @@ pub fn run() {
             let _ = window.show();
             apply_noactivate(&window);
 
+            setup_tray(app.handle())?;
             spawn_connector_sidecar(app.handle().clone(), connector_child.clone());
 
             Ok(())
@@ -296,6 +391,8 @@ pub fn run() {
             {
                 let _ = child.kill();
             }
+            // Médias temporaires ouverts en visionneuse : rien à en garder.
+            let _ = std::fs::remove_dir_all(media_tmp_dir());
         }
     });
 }

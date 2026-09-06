@@ -12,6 +12,7 @@
 // Guide de migration : https://whiskey.so/migrate-latest
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
 } from 'baileys';
@@ -25,6 +26,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sealAuthDir, unsealAuthDir } from './authCrypt.js';
+import { unwrapMessage, isViewOnce, extractText, mediaFor, sameUser } from './messages.js';
+import { parseLockPid, isProcessAlive, lockDecision } from './lock.js';
 
 // %APPDATA% plutôt qu'un chemin relatif au dossier du connecteur : une
 // fois empaqueté en sidecar (phase 4), le connecteur tourne depuis un
@@ -45,6 +48,46 @@ function migrateLegacyAuthLocation() {
   if (fs.existsSync('./auth.enc')) fs.renameSync('./auth.enc', AUTH_ENC_FILE);
 }
 migrateLegacyAuthLocation();
+
+// Verrou mono-instance — AVANT toute prise sur auth/ et avant d'enregistrer
+// le moindre handler de sortie : une seconde instance doit ressortir sans
+// rien toucher (ni déchiffrer auth/, ni écraser le fichier de découverte de
+// la première). Deux connecteurs sur la même session Baileys se
+// déconnectent mutuellement en boucle — c'est la bulle qui vire au gris
+// puis au vert sans arrêt.
+const LOCK_FILE = path.join(DATA_DIR, 'connector.lock');
+
+function acquireSingleInstanceLock() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  let lockText = '';
+  try {
+    lockText = fs.readFileSync(LOCK_FILE, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;   // absent = normal ; autre chose = anormal
+  }
+
+  const { acquire, holder } = lockDecision(lockText, {
+    selfPid: process.pid,
+    isAlive: isProcessAlive,
+  });
+  if (!acquire) {
+    console.error(`Un connecteur tourne déjà (PID ${holder}). Sortie.`);
+    // Code 0 : le superviseur Rust ne doit pas enchaîner les relances.
+    process.exit(0);
+  }
+  fs.writeFileSync(LOCK_FILE, String(process.pid), { mode: 0o600 });
+}
+
+function releaseLock() {
+  try {
+    if (parseLockPid(fs.readFileSync(LOCK_FILE, 'utf8')) === process.pid) {
+      fs.rmSync(LOCK_FILE, { force: true });
+    }
+  } catch {}
+}
+
+acquireSingleInstanceLock();
 
 // Port choisi par l'OS et jeton à usage unique par lancement, plutôt
 // que 8787 en dur : un process tiers sur la même machine ne doit pas
@@ -74,6 +117,7 @@ function sealAuthOnExit() {
 
 process.on('exit', cleanupRuntimeFile);
 process.on('exit', sealAuthOnExit);
+process.on('exit', releaseLock);
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
 
@@ -95,6 +139,30 @@ let sock = null;
 
 /** Clients ayant prouvé qu'ils connaissent le jeton — seuls destinataires des broadcasts. */
 const authedClients = new Set();
+let latestQr = null;
+let connectionState = 'connecting';
+let reconnectTimer = null;
+
+/** Chaîne du QR actuellement en cours d'encodage en PNG (async) — permet à
+    la promesse de vérifier, à sa résolution, qu'aucun événement plus récent
+    (nouveau QR, connexion ouverte) ne l'a entre-temps rendue obsolète. */
+let pendingQr = null;
+
+function scheduleStart(delay = 1500) {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    start().catch((err) => {
+      console.error('Redémarrage impossible :', err);
+      scheduleStart(3000);
+    });
+  }, delay);
+}
+
+function clearAuthForPairing() {
+  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(AUTH_ENC_FILE, { force: true }); } catch {}
+}
 
 /** Cache des photos de profil : une requête réseau par contact, pas par message. */
 const avatars = new Map();
@@ -106,25 +174,46 @@ function broadcast(payload) {
   }
 }
 
+/** Un fil vient d'être traité ailleurs (lu ou répondu depuis le
+    téléphone / WhatsApp Web). On le signale à l'overlay pour qu'il
+    vide ce fil de sa file. Bulle réagit à une lecture faite ailleurs,
+    mais n'en émet jamais (voir CLAUDE.md, « Aucun accusé de lecture »).
+    Le console.log reste le temps de vérifier sur appareil réel quels
+    événements Baileys sont fiables — à retirer ensuite. */
+function signalRead(jid) {
+  if (!jid || jid === 'status@broadcast' || jid.endsWith('@newsletter')) return;
+  console.log(`Fil traité ailleurs : ${jid}`);
+  broadcast({ type: 'read', jid });
+}
+
 /* ---------------------------------------------------------------
-   Extraction du texte
-   Un message WhatsApp a une dizaine de formes possibles. On ne traite
-   que celles qui portent du texte : le reste (média, réaction, appel,
-   accusé) n'a pas sa place dans une bulle de réponse rapide.
+   Extraction du texte et du média
+   Les formes possibles d'un message WhatsApp — et le déballage des
+   enveloppes viewOnce* / ephemeral — vivent dans messages.js (testé).
+   Ici on ne fait que télécharger le média une fois qu'on sait qu'il y
+   en a un.
    --------------------------------------------------------------- */
 
-function extractText(msg) {
-  const m = msg.message;
-  if (!m) return null;
-
-  return (
-    m.conversation ??
-    m.extendedTextMessage?.text ??
-    m.imageMessage?.caption ??
-    m.videoMessage?.caption ??
-    m.documentMessage?.caption ??
-    null
-  );
+async function downloadMedia(msg, content, media) {
+  if (!media) return null;
+  try {
+    // downloadMediaMessage cherche le nœud média dans msg.message.imageMessage
+    // etc. — il ne sait pas déballer une enveloppe viewOnce/ephemeral. On lui
+    // passe une copie dont .message est le contenu déjà déballé.
+    const downloadable = content === msg.message ? msg : { ...msg, message: content };
+    const buffer = await downloadMediaMessage(downloadable, 'buffer', {});
+    // Baileys renvoie le mimetype audio avec un espace ("audio/ogg; codecs=opus",
+    // voir node_modules/baileys/lib/Utils/messages.js) : un espace brut dans une
+    // data URL n'est pas un caractère valide, le navigateur le pourcent-encode à
+    // la volée et le <audio> ne reconnaît plus le type — la lecture échoue
+    // silencieusement. Les mimetypes image/sticker n'ont pas ce paramètre, d'où
+    // le bug qui ne touchait que l'audio.
+    const mime = media.mime.replace(/\s+/g, '');
+    return { ...media, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` };
+  } catch (err) {
+    console.error('Téléchargement du média impossible :', err?.message);
+    return null;
+  }
 }
 
 async function avatarFor(jid) {
@@ -167,16 +256,31 @@ async function start() {
       // l'image sert à l'écran de configuration dans l'overlay.
       console.log('\nScannez ce code depuis WhatsApp › Appareils liés :\n');
       qrcodeTerminal.generate(qr, { small: true });
+      pendingQr = qr;
       QRCode.toDataURL(qr, {
         margin: 2,
         width: 240,
         color: { dark: '#000000', light: '#ffffff' },
       })
-        .then((dataUrl) => broadcast({ type: 'qr', dataUrl }))
+        .then((dataUrl) => {
+          // La génération est async : si un QR plus récent a déjà pris le
+          // relais, ou si la connexion s'est ouverte entre-temps (le
+          // redémarrage 515 juste après le scan en est le cas courant),
+          // ce résultat est obsolète — l'appliquer écraserait un état
+          // "connecté" avec un QR périmé, et ça ne s'en irait plus jamais
+          // tant que le connecteur tourne.
+          if (pendingQr !== qr) return;
+          latestQr = dataUrl;
+          connectionState = 'pairing';
+          broadcast({ type: 'qr', dataUrl });
+        })
         .catch((err) => console.error('Génération du QR impossible :', err?.message));
     }
 
     if (connection === 'open') {
+      pendingQr = null;
+      latestQr = null;
+      connectionState = 'connected';
       console.log('WhatsApp connecté.');
       broadcast({ type: 'status', state: 'connected' });
     }
@@ -187,14 +291,20 @@ async function start() {
       // 515 « restart required » juste après l'appairage : attendu, pas une erreur.
       // Tout sauf une déconnexion volontaire mérite une reconnexion.
       if (code === DisconnectReason.loggedOut) {
-        console.log('Session révoquée. Supprimez ./auth et relancez pour réappairer.');
-        broadcast({ type: 'status', state: 'disconnected' });
+        clearAuthForPairing();
+        pendingQr = null;
+        latestQr = null;
+        connectionState = 'connecting';
+        console.log('Session révoquée. Nouveau QR en préparation…');
+        broadcast({ type: 'status', state: 'reconnecting' });
+        scheduleStart(500);
         return;
       }
 
       console.log(`Connexion perdue (${code ?? 'inconnu'}), reconnexion…`);
+      connectionState = 'connecting';
       broadcast({ type: 'status', state: 'reconnecting' });
-      setTimeout(start, 1500);
+      scheduleStart();
     }
   });
 
@@ -208,12 +318,29 @@ async function start() {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      if (msg.key.fromMe) continue;                              // nos propres envois
       if (msg.key.remoteJid === 'status@broadcast') continue;    // les statuts
       if (msg.key.remoteJid?.endsWith('@newsletter')) continue;  // les chaînes
 
-      const text = extractText(msg);
-      if (!text) continue;
+      // Un message sortant remonté depuis un autre appareil : ce fil vient
+      // d'être répondu ailleurs. On le signale, puis on s'arrête là — nos
+      // propres envois n'ont pas leur place dans une bulle de réception.
+      if (msg.key.fromMe) {
+        signalRead(msg.key.remoteJid);
+        continue;
+      }
+
+      // Déballe les enveloppes viewOnce* / ephemeral : sans ça, une photo
+      // à usage unique et l'intégralité d'un fil en messages éphémères
+      // passent inaperçues.
+      const content = unwrapMessage(msg.message);
+      const text = extractText(content) || '';
+      const media = await downloadMedia(msg, content, mediaFor(content));
+      if (!text && !media) continue;
+
+      // Marque le média « vue unique » : l'overlay l'affiche (il n'a pas de
+      // stockage — la photo s'efface avec la file) mais le signale, car
+      // elle n'est déjà plus disponible sur le téléphone.
+      if (media && isViewOnce(msg.message)) media.viewOnce = true;
 
       const jid = msg.key.remoteJid;
       const isGroup = jid.endsWith('@g.us');
@@ -223,6 +350,7 @@ async function start() {
         jid,                                    // clé opaque, jamais reconstruite
         from: msg.pushName || (isGroup ? 'Groupe' : 'Inconnu'),
         text,
+        media,
         avatar: await avatarFor(jid),
         at: Number(msg.messageTimestamp) * 1000,
         group: isGroup,
@@ -230,6 +358,65 @@ async function start() {
 
       // Volontairement : aucun accusé de lecture. Ouvrir la bulle ne doit
       // pas marquer la conversation comme lue sur le téléphone.
+    }
+  });
+
+  /* -------------------------------------------------------------
+     Lecture ailleurs
+     Quand un fil est lu sur un autre appareil (téléphone, WhatsApp
+     Web), le multi-appareils propage un chats.update dont le
+     unreadCount retombe à 0. unreadCount peut aussi valoir -1
+     (« marquer comme non lu ») : on ne traite que l'égalité stricte.
+     ------------------------------------------------------------- */
+
+  sock.ev.on('chats.update', (updates) => {
+    for (const update of updates) {
+      if (update.unreadCount === 0) {
+        console.log(`[lecture?] chats.update unreadCount=0 jid=${update.id}`);
+        signalRead(update.id);
+      }
+    }
+  });
+
+  /* -------------------------------------------------------------
+     Instrumentation temporaire (voir IDEES-WIDGETS.md) — on ne sait pas
+     encore quel événement Baileys remonte de façon fiable quand un fil
+     est *lu* sur un autre appareil sans réponse. Chaque écouteur logue
+     avec un préfixe distinct ; lancer le connecteur avec la sortie
+     visible (npm start), lire un fil sur le téléphone, et relever la
+     ligne qui apparaît. On garde ensuite le fiable, on retire le reste.
+
+     message-receipt.update : un accusé portant readTimestamp dont le
+     userJid est le nôtre = on a lu ce fil quelque part. C'est le
+     candidat le plus solide, donc le seul câblé à signalRead pour
+     l'instant.
+
+     messages.update : status ∈ {3,4} concerne le fait qu'un
+     destinataire a reçu/lu *notre* message — pas nous lisant le sien.
+     Log seul, jamais signalRead.
+     ------------------------------------------------------------- */
+
+  const selfJid = () => sock?.user?.id;
+
+  sock.ev.on('message-receipt.update', (updates) => {
+    for (const { key, receipt } of updates) {
+      if (!key?.remoteJid || !receipt) continue;
+      const mine = sameUser(receipt.userJid, selfJid());
+      console.log(
+        `[lecture?] message-receipt.update jid=${key.remoteJid} ` +
+        `userJid=${receipt.userJid} readTs=${receipt.readTimestamp ?? '—'} mine=${mine}`
+      );
+      if (mine && receipt.readTimestamp) signalRead(key.remoteJid);
+    }
+  });
+
+  sock.ev.on('messages.update', (updates) => {
+    for (const { key, update } of updates) {
+      if (!key?.remoteJid) continue;
+      console.log(
+        `[lecture?] messages.update jid=${key.remoteJid} ` +
+        `fromMe=${key.fromMe} status=${update?.status ?? '—'}`
+      );
     }
   });
 }
@@ -258,6 +445,8 @@ wss.on('connection', (client) => {
       if (cmd.type === 'auth' && cmd.token === TOKEN) {
         authedClients.add(client);
         clearTimeout(authTimer);
+        if (latestQr) client.send(JSON.stringify({ type: 'qr', dataUrl: latestQr }));
+        client.send(JSON.stringify({ type: 'status', state: connectionState }));
       } else {
         client.close();
       }
