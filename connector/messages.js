@@ -81,6 +81,59 @@ export function mediaFor(content) {
   return null;
 }
 
+/** contextInfo du contenu déballé, ou `null`. Chaque type de message
+    porte le sien (un texte mentionnant quelqu'un est un
+    `extendedTextMessage`, une légende d'image un `imageMessage`, etc.).
+    On ne s'en sert que pour `mentionedJid`. */
+const CONTEXT_HOSTS = [
+  'extendedTextMessage',
+  'imageMessage',
+  'videoMessage',
+  'audioMessage',
+  'documentMessage',
+  'stickerMessage',
+];
+
+export function contextInfoFor(content) {
+  if (!content) return null;
+  for (const key of CONTEXT_HOSTS) {
+    const ctx = content[key]?.contextInfo;
+    if (ctx) return ctx;
+  }
+  return null;
+}
+
+/** Dans un groupe, une mention arrive dans le texte sous la forme
+    `@<partie-utilisateur-du-JID>` (chiffres bruts d'un numéro ou d'un
+    LID) ; les JID visés sont listés à part dans
+    `contextInfo.mentionedJid`. On remplace chaque `@<chiffres>` par
+    `@<nom>` quand `nameForJid` connaît ce JID (la Map `contacts` du
+    connecteur, alimentée par le multi-appareils). Une mention non
+    résolue — LID absent du carnet, forme de JID qui ne correspond pas —
+    est laissée telle quelle : mieux vaut `@221...` que rien.
+
+    Le motif capture la suite de chiffres entière (`@(\d+)`) puis compare
+    à l'identique, pour qu'une mention `@123` ne mange pas un `@1234`
+    voisin. */
+export function resolveMentions(text, mentionedJids, nameForJid) {
+  if (!text || !Array.isArray(mentionedJids) || mentionedJids.length === 0) {
+    return text || '';
+  }
+
+  const names = new Map();
+  for (const jid of mentionedJids) {
+    const user = String(jid).split('@')[0];
+    if (!user) continue;
+    const name = nameForJid(jid);
+    if (name) names.set(user, name);
+  }
+  if (names.size === 0) return text;
+
+  return text.replace(/@(\d+)/g, (whole, user) =>
+    names.has(user) ? '@' + names.get(user) : whole
+  );
+}
+
 /** Deux JID désignent-ils le même compte, en ignorant le suffixe
     `:device` que le multi-appareils accole (`221…:12@s.whatsapp.net`) ?
     Le domaine doit correspondre — un numéro et un LID de mêmes chiffres
@@ -91,4 +144,13 @@ export function sameUser(a, b) {
   if (!a || !b) return false;
   const strip = (s) => String(s).replace(/:\d+(?=@)/, '');
   return strip(a) === strip(b);
+}
+
+/** Nom qu'*on* a enregistré pour un contact (champ `name` — le carnet
+    d'adresses propagé par le multi-appareils), ou `null`. On ignore
+    volontairement `notify` (le pushName, déjà le repli) et `verifiedName`
+    (raison sociale d'un compte pro). */
+export function pickContactName(contact) {
+  const name = contact?.name?.trim();
+  return name || null;
 }

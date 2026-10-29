@@ -4,7 +4,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { unwrapMessage, isViewOnce, extractText, mediaFor, sameUser } from './messages.js';
+import {
+  unwrapMessage,
+  isViewOnce,
+  extractText,
+  mediaFor,
+  contextInfoFor,
+  resolveMentions,
+  sameUser,
+  pickContactName,
+} from './messages.js';
 
 /* ---------------------------------------------------------------
    unwrapMessage — pèle les couches viewOnce* / ephemeral
@@ -137,6 +146,77 @@ test('mediaFor renvoie null sans média', () => {
 });
 
 /* ---------------------------------------------------------------
+   contextInfoFor — le contextInfo, quel que soit le type de message
+   qui le porte
+   --------------------------------------------------------------- */
+
+test('contextInfoFor lit le contextInfo d\'un extendedTextMessage', () => {
+  const ctx = { mentionedJid: ['123@s.whatsapp.net'] };
+  assert.equal(contextInfoFor({ extendedTextMessage: { text: 'hey @123', contextInfo: ctx } }), ctx);
+});
+
+test('contextInfoFor lit le contextInfo porté par une légende d\'image', () => {
+  const ctx = { mentionedJid: ['123@lid'] };
+  assert.equal(contextInfoFor({ imageMessage: { caption: '@123', contextInfo: ctx } }), ctx);
+});
+
+test('contextInfoFor renvoie null sans contextInfo', () => {
+  assert.equal(contextInfoFor({ conversation: 'salut' }), null);
+  assert.equal(contextInfoFor({ extendedTextMessage: { text: 'x' } }), null);
+  assert.equal(contextInfoFor(null), null);
+});
+
+/* ---------------------------------------------------------------
+   resolveMentions — `@<chiffres>` → `@<nom>` quand le JID est connu
+   --------------------------------------------------------------- */
+
+const nameBook = (map) => (jid) => map[jid] ?? null;
+
+test('resolveMentions remplace une mention connue par le nom enregistré', () => {
+  assert.equal(
+    resolveMentions('salut @221777, tu viens ?', ['221777@s.whatsapp.net'],
+      nameBook({ '221777@s.whatsapp.net': 'Awa' })),
+    'salut @Awa, tu viens ?'
+  );
+});
+
+test('resolveMentions résout aussi un JID @lid', () => {
+  assert.equal(
+    resolveMentions('@132362369261770 regarde', ['132362369261770@lid'],
+      nameBook({ '132362369261770@lid': 'Moussa' })),
+    '@Moussa regarde'
+  );
+});
+
+test('resolveMentions laisse une mention non résolue telle quelle', () => {
+  assert.equal(
+    resolveMentions('cc @221777', ['221777@lid'], nameBook({})),
+    'cc @221777'
+  );
+});
+
+test('resolveMentions gère plusieurs mentions dans le même texte', () => {
+  assert.equal(
+    resolveMentions('@111 et @222 présents', ['111@s.whatsapp.net', '222@s.whatsapp.net'],
+      nameBook({ '111@s.whatsapp.net': 'Ada', '222@s.whatsapp.net': 'Ben' })),
+    '@Ada et @Ben présents'
+  );
+});
+
+test('resolveMentions ne confond pas @123 avec un @1234 voisin', () => {
+  assert.equal(
+    resolveMentions('@123 pas @1234', ['123@s.whatsapp.net'],
+      nameBook({ '123@s.whatsapp.net': 'Zoe' })),
+    '@Zoe pas @1234'
+  );
+});
+
+test('resolveMentions rend le texte inchangé sans mention', () => {
+  assert.equal(resolveMentions('rien à résoudre', [], nameBook({})), 'rien à résoudre');
+  assert.equal(resolveMentions('', ['1@s.whatsapp.net'], nameBook({ '1@s.whatsapp.net': 'X' })), '');
+});
+
+/* ---------------------------------------------------------------
    sameUser — deux JID désignent-ils le même compte (suffixe :device
    ignoré). Sert à reconnaître un accusé de lecture émis par soi-même
    depuis un autre appareil.
@@ -167,4 +247,29 @@ test('sameUser ne confond pas un numéro et un LID de mêmes chiffres', () => {
 test('sameUser est faux si un JID manque', () => {
   assert.equal(sameUser(null, '221777777@s.whatsapp.net'), false);
   assert.equal(sameUser('221777777@s.whatsapp.net', undefined), false);
+});
+
+/* ---------------------------------------------------------------
+   pickContactName — le nom que *l'utilisateur* a enregistré pour un
+   contact (carnet d'adresses synchronisé), pas le pushName que le
+   contact s'est donné.
+   --------------------------------------------------------------- */
+
+test('pickContactName renvoie le nom enregistré', () => {
+  assert.equal(pickContactName({ id: 'x@s.whatsapp.net', name: 'Maman' }), 'Maman');
+});
+
+test('pickContactName rogne les espaces', () => {
+  assert.equal(pickContactName({ name: '  Awa Diop \n' }), 'Awa Diop');
+});
+
+test('pickContactName ignore le pushName (notify) et le nom vérifié', () => {
+  assert.equal(pickContactName({ notify: 'Djo 🔥', verifiedName: 'Djo SARL' }), null);
+});
+
+test('pickContactName renvoie null sans nom exploitable', () => {
+  assert.equal(pickContactName({ id: 'x', name: '' }), null);
+  assert.equal(pickContactName({ id: 'x', name: '   ' }), null);
+  assert.equal(pickContactName({ id: 'x' }), null);
+  assert.equal(pickContactName(null), null);
 });

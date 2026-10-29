@@ -128,15 +128,33 @@ Chacun coûte une soirée si on tombe dedans.
 ## Analyse d'un message
 
 `connector/messages.js` isole les fonctions pures — `unwrapMessage`,
-`isViewOnce`, `extractText`, `mediaFor` — pour qu'elles soient testables sans
-réseau ni Baileys live (`node --test connector/messages.test.mjs`). `index.js`
-ne fait plus que les câbler au flux et télécharger le média.
+`isViewOnce`, `extractText`, `mediaFor`, `contextInfoFor`, `resolveMentions`,
+`sameUser`, `pickContactName` — pour qu'elles soient testables sans réseau ni
+Baileys live (`node --test connector/messages.test.mjs`). `index.js` ne fait
+plus que les câbler au flux et télécharger le média.
+
+**Mentions de groupe.** Une mention arrive dans le texte sous la forme
+`@<chiffres>` (partie utilisateur d'un numéro ou d'un LID) ; les JID visés
+sont dans `contextInfo.mentionedJid`. `resolveMentions` remplace chaque
+`@<chiffres>` par `@<nom>` quand la `Map contacts` connaît ce JID. Une
+mention non résolue — LID absent du carnet, forme de JID qui ne correspond
+pas — reste `@<chiffres>` : pas d'invention d'identité à partir d'un numéro
+(voir « Le `remoteJid` est une clé opaque »).
 
 Types de média reconnus : `image`, `sticker`, `audio`, `video`. Le champ
 `media` du protocole porte `{kind, mime, dataUrl, viewOnce?}` — `viewOnce`
 n'est présent (à `true`) que pour un média à usage unique, que l'overlay
 affiche quand même (Bulle n'a pas de mémoire, il s'efface avec la file) mais
 étiquette « vue unique » puisqu'il n'est déjà plus sur le téléphone.
+
+**Nom affiché (`from`).** Pour un fil 1:1, on préfère le nom qu'*on* a
+enregistré pour le contact (`pickContactName` sur le champ `name` du carnet
+d'adresses propagé par le multi-appareils), à défaut le `pushName` que le
+contact s'est donné, à défaut « Inconnu ». Baileys ne tient pas de store de
+contacts : `index.js` garde une `Map` JID → nom (`contacts`, même forme que
+`avatars` — RAM, non persistée, pas d'historique), alimentée par
+`messaging-history.set`, `contacts.upsert` et `contacts.update`. En groupe le
+sujet reste géré côté overlay ; on n'y résout pas encore l'expéditeur.
 
 ## Sécurité
 
@@ -224,7 +242,12 @@ se distinguent par le soulignement.
    cliquable que l'overlay signale via `sync_hit_region` — `set_ignore_cursor_events`
    coupe tous les événements souris de la fenêtre, pas juste une région, donc un
    mousemove JS ne peut pas détecter le retour du curseur une fois le
-   passthrough actif.
+   passthrough actif. `syncHitRegion` lit `getBoundingClientRect()` un rAF
+   après `setState('open')`, alors que le panneau est encore en pleine
+   transition `transform` : le rectangle capturé serait celui du panneau
+   rétréci et décalé, avec une bande morte le long des bords (bouton emoji,
+   moitié gauche du lecteur audio). D'où une resynchronisation sur le
+   `transitionend` du `transform` du panneau, quand la géométrie est stable.
 2. ~~Déclarer le connecteur en sidecar~~ — fait. `scripts/build-sidecar.mjs`
    compile `connector/index.js` en exécutable unique avec `bun build --compile`
    (nommé au triplet de cible Rust), lancé automatiquement avant

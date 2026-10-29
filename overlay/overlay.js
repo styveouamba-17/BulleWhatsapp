@@ -863,6 +863,18 @@ function syncHitRegion() {
   });
 }
 
+// syncHitRegion() lit getBoundingClientRect() un rAF après setState('open'),
+// alors que le panneau est encore en pleine transition
+// `transform: scale(0.90) translateX(14px)` → `scale(1) translateX(0)`
+// (250 ms). Le rectangle capturé est donc celui du panneau rétréci et
+// décalé, et il n'est plus recalculé ensuite : une bande morte le long des
+// bords laisse passer le clic vers le bureau (bouton emoji, moitié gauche
+// du lecteur audio…). On resynchronise une fois la transition du panneau
+// terminée, quand la géométrie est stable.
+el.panel.addEventListener('transitionend', (e) => {
+  if (e.target === el.panel && e.propertyName === 'transform') syncHitRegion();
+});
+
 /* ---------------------------------------------------------------
    Menu contextuel — clic droit sur la bulle
    --------------------------------------------------------------- */

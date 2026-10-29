@@ -561,10 +561,13 @@ body.is-tauri .devbar { display: none; }
   pointer-events: none;
 }
 
+/* Hauteur native des contrôles Chromium : en-dessous (on avait 40px), le
+   bouton lecture et la barre de progression deviennent minuscules et durs
+   à viser. */
 .panel__audio {
   display: block;
   width: 100%;
-  height: 40px;
+  height: 54px;
 }
 
 .panel__msg {

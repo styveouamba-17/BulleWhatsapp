@@ -26,7 +26,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sealAuthDir, unsealAuthDir } from './authCrypt.js';
-import { unwrapMessage, isViewOnce, extractText, mediaFor, sameUser } from './messages.js';
+import {
+  unwrapMessage,
+  isViewOnce,
+  extractText,
+  mediaFor,
+  contextInfoFor,
+  resolveMentions,
+  sameUser,
+  pickContactName,
+} from './messages.js';
 import { parseLockPid, isProcessAlive, lockDecision } from './lock.js';
 
 // %APPDATA% plutôt qu'un chemin relatif au dossier du connecteur : une
@@ -167,6 +176,20 @@ function clearAuthForPairing() {
 /** Cache des photos de profil : une requête réseau par contact, pas par message. */
 const avatars = new Map();
 
+/** Noms du carnet d'adresses de l'utilisateur, JID → nom qu'*il* a
+    enregistré (pas le pushName que le contact s'est donné). Même forme
+    que `avatars` : en RAM, non persisté, alimenté par les événements
+    contacts.* du multi-appareils. Sert au repli d'affichage des fils 1:1. */
+const contacts = new Map();
+
+function rememberContacts(list) {
+  if (!Array.isArray(list)) return;
+  for (const c of list) {
+    const name = pickContactName(c);
+    if (c?.id && name) contacts.set(c.id, name);
+  }
+}
+
 function broadcast(payload) {
   const raw = JSON.stringify(payload);
   for (const client of authedClients) {
@@ -247,6 +270,14 @@ async function start() {
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  // Carnet d'adresses : Baileys ne tient pas de store, on garde juste
+  // JID → nom enregistré au fil des événements. `messaging-history.set`
+  // porte la liste initiale (parmi l'historique qu'on ignore par
+  // ailleurs — piège n°1), `contacts.upsert`/`update` les suivants.
+  sock.ev.on('messaging-history.set', ({ contacts: list }) => rememberContacts(list));
+  sock.ev.on('contacts.upsert', rememberContacts);
+  sock.ev.on('contacts.update', rememberContacts);
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -333,7 +364,11 @@ async function start() {
       // à usage unique et l'intégralité d'un fil en messages éphémères
       // passent inaperçues.
       const content = unwrapMessage(msg.message);
-      const text = extractText(content) || '';
+      // Mentions de groupe : le texte contient `@<chiffres>`, les noms
+      // sont dans contextInfo.mentionedJid. On résout via le carnet
+      // (`contacts`) ; une mention inconnue reste `@<chiffres>`.
+      const mentioned = contextInfoFor(content)?.mentionedJid || [];
+      const text = resolveMentions(extractText(content) || '', mentioned, (jid) => contacts.get(jid));
       const media = await downloadMedia(msg, content, mediaFor(content));
       if (!text && !media) continue;
 
@@ -345,10 +380,17 @@ async function start() {
       const jid = msg.key.remoteJid;
       const isGroup = jid.endsWith('@g.us');
 
+      // Fil 1:1 : on préfère le nom qu'on a enregistré pour ce contact ;
+      // à défaut, le pushName qu'il s'est donné. En groupe, le sujet reste
+      // géré côté overlay — on garde le pushName de l'expéditeur.
+      const from = (!isGroup && contacts.get(jid))
+        || msg.pushName
+        || (isGroup ? 'Groupe' : 'Inconnu');
+
       broadcast({
         type: 'message',
         jid,                                    // clé opaque, jamais reconstruite
-        from: msg.pushName || (isGroup ? 'Groupe' : 'Inconnu'),
+        from,
         text,
         media,
         avatar: await avatarFor(jid),
